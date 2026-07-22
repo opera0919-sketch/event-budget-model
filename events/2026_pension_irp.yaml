@@ -1,0 +1,34 @@
+# 회차별 이벤트 명세 — 연금저축·IRP 신청고객수/예산 예측
+# 각 분석 회차는 이런 명세 파일 1개로 관리한다(events/ 아래).
+event_id: 2026_pension_irp
+title: 연금저축·IRP 이벤트 신청고객수/예산 예측
+
+# 실적/투영 데이터 소스
+history_csv: data/history.csv
+market_csv: data/market.csv        # (선택) 시장 지표. 없거나 비어 있으면 시장배수=1.0
+
+# 예측 대상 회차(기준 고객수·신청자수가 공란인 미래 회차)
+forecast_rounds: ["2026_03", "2026_04", "2027_01"]
+
+# 예측 대상 상품(이벤트). 상품마다 take-rate 기준열과 리워드 레버를 가진다.
+products:
+  - name: pension
+    label: 연금저축
+    base_col_end: pension_end            # take-rate 분모 = 종료연월 고객수
+    applicants_col: pension_applicants   # take-rate 분자 = 신청고객수
+    avg_reward: 40000                    # 평균 리워드 금액(원/인) — 실제 이벤트값으로 대체
+    fixed_costs: 0                       # 제작·배송 등 고정비(원)
+    tax_rate: 0.0                        # 현금성 0.0 / 경품 0.22(제세공과금)
+  - name: irp
+    label: IRP
+    base_col_end: irp_end
+    applicants_col: irp_applicants
+    avg_reward: 50000
+    fixed_costs: 0
+    tax_rate: 0.0
+
+# 예산 시나리오 레버(생략 시 params/benchmarks.yaml 기본값 사용)
+# goal_achievement: 목표 달성률 / reward_payout_rate: 리워드 지급률
+levers:
+  goal_achievement: [0.8, 1.0, 1.2]      # 보수 / 기준 / 낙관
+  reward_payout_rate: [0.6, 0.7, 0.8]
