@@ -31,6 +31,9 @@ class Product:
     avg_reward: float
     fixed_costs: float = 0.0
     tax_rate: float = 0.0
+    base_mode: str = "total_end"        # total_end | start | net_new
+    base_col_start: str | None = None   # net_new/start 모드에 필요
+    payout_rate_col: str | None = None  # (선택) 회차별 실지급률 실적 컬럼
 
 
 @dataclass
@@ -67,8 +70,14 @@ def load_spec(path: str) -> EventSpec:
                 avg_reward=float(p["avg_reward"]),
                 fixed_costs=float(p.get("fixed_costs", 0.0)),
                 tax_rate=float(p.get("tax_rate", 0.0)),
+                base_mode=p.get("base_mode", "total_end"),
+                base_col_start=p.get("base_col_start"),
+                payout_rate_col=p.get("payout_rate_col"),
             )
         )
+        if products[-1].base_mode in ("start", "net_new") and not products[-1].base_col_start:
+            raise ValueError(
+                f"products[{i}] base_mode='{products[-1].base_mode}'에는 base_col_start 필요")
 
     return EventSpec(
         event_id=raw["event_id"],

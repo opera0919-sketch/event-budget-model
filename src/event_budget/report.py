@@ -122,3 +122,44 @@ def write_report(spec, markdown: str) -> str:
     with open(path, "w", encoding="utf-8") as f:
         f.write(markdown)
     return path
+
+
+def build_backtest_report(spec, per_product: dict, min_train: int, target: float,
+                          min_cv: float) -> str:
+    """per_product: {label: (base_mode, results, summary, suggested_cv)}."""
+    L = [f"# {spec.title} — 백테스트(사후예측) 검증", "",
+         f"- 생성일: {date.today().isoformat()}",
+         f"- 방식: 각 실적 회차를 그 이전 데이터만으로 2단계 예측 → 실제와 비교(누수 방지)",
+         f"- min_train={min_train}, 목표 밴드 커버리지={target:.0%}, 현재 min_cv={min_cv:.2f}", ""]
+    for label, (base_mode, res, s, cv) in per_product.items():
+        L.append(f"## {label}  (base_mode={base_mode})")
+        L.append("")
+        if not res:
+            L.append("평가 가능한 회차 없음(학습표본 부족).")
+            L.append("")
+            continue
+        L.append("| 회차 | 실제 | 예측(기준) | 오차% | 밴드내 |")
+        L.append("|---|---|---|---|---|")
+        for r in res:
+            L.append(f"| {r['round']} | {fmt_n(r['actual'])} | {fmt_n(r['pred_base'])} | "
+                     f"{r['ape']*100:.1f}% | {'O' if r['in_band'] else 'X'} |")
+        L.append("")
+        L.append(f"- **MAPE {s['mape']*100:.1f}%** · 편향 {s['bias']*100:+.1f}% · "
+                 f"밴드 커버리지 {s['coverage']*100:.0f}% (n={s['n']})")
+        L.append(f"- 목표 커버리지 위한 경험적 CV ≈ **{cv:.2f}** "
+                 f"(현재 min_cv {min_cv:.2f} 대비)")
+        L.append("")
+    L.append("---")
+    L.append("> 편향이 양(+)이면 과소예측(실제가 더 큼). 커버리지가 목표보다 낮으면 "
+             "min_cv를 경험적 CV 수준으로 넓혀 밴드 신뢰도를 맞춘다.")
+    L.append("")
+    return "\n".join(L)
+
+
+def write_backtest_report(spec, markdown: str) -> str:
+    out_dir = os.path.join(REPO_ROOT, "reports")
+    os.makedirs(out_dir, exist_ok=True)
+    path = os.path.join(out_dir, f"{spec.event_id}_backtest.md")
+    with open(path, "w", encoding="utf-8") as f:
+        f.write(markdown)
+    return path

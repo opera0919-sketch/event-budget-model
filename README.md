@@ -19,8 +19,18 @@ python -m event_budget.cli estimate events/2026_pension_irp.yaml
 python -m event_budget.cli scenario events/2026_pension_irp.yaml \
     --goal 0.8,1.0,1.2 --payout 0.6,0.7,0.8 --reward 40000,50000
 
+# 백테스트(사후예측 정확도·밴드 커버리지 검증)
+python -m event_budget.cli backtest events/2026_pension_irp.yaml --min-train 3
+
 pytest tests/
 ```
+
+## 정확도 강화 옵션
+
+- **시장·거시 지표 결합**(#2): `data/market.csv`에 거래대금·지수·변동성을 채우고
+  `params/benchmarks.yaml`의 `market.*_elasticity`를 >0으로 설정하면 장세 효과 반영(기본 OFF).
+- **분모 분해**(#4): 명세의 `base_mode`를 `total_end`/`start`/`net_new`로 바꿔 take-rate 분모 선택.
+- **백테스트**(#7): `backtest` 명령으로 MAPE·편향·밴드 커버리지 측정 → `min_cv` 등 보정.
 
 ## 구조
 

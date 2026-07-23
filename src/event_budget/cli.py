@@ -10,30 +10,32 @@ from __future__ import annotations
 import argparse
 import sys
 
-from . import demand, report
+from . import backtest, demand, report
 from .calibrate import apply_calibration
 from .scenario import scenario_grid
-from .schema import load_benchmarks, load_history, load_spec
+from .schema import load_benchmarks, load_history, load_market, load_spec
 from .report import fmt_n, fmt_won
 
 
 def _load(spec_path):
     spec = load_spec(spec_path)
     history = load_history(spec.history_csv)
-    benchmarks = load_benchmarks()
+    raw = load_benchmarks()
+    market = load_market(spec.market_csv)
     # 실적으로 시즌 take-rate 보정
-    benchmarks = apply_calibration(history, spec.products, benchmarks)
-    return spec, history, benchmarks
+    benchmarks = apply_calibration(history, spec.products, raw)
+    return spec, history, benchmarks, raw, market
 
 
-def _forecasts(spec, history, benchmarks):
-    return {p.name: demand.predict_product(history, p, benchmarks, spec.forecast_rounds)
+def _forecasts(spec, history, benchmarks, market):
+    return {p.name: demand.predict_product(history, p, benchmarks,
+                                           spec.forecast_rounds, market)
             for p in spec.products}
 
 
 def cmd_estimate(args):
-    spec, history, benchmarks = _load(args.spec)
-    forecasts = _forecasts(spec, history, benchmarks)
+    spec, history, benchmarks, raw, market = _load(args.spec)
+    forecasts = _forecasts(spec, history, benchmarks, market)
 
     print(f"\n[{spec.title}]  회차: {', '.join(spec.forecast_rounds)}")
     for p in spec.products:
@@ -57,8 +59,8 @@ def _parse_floats(s):
 
 
 def cmd_scenario(args):
-    spec, history, benchmarks = _load(args.spec)
-    forecasts = _forecasts(spec, history, benchmarks)
+    spec, history, benchmarks, raw, market = _load(args.spec)
+    forecasts = _forecasts(spec, history, benchmarks, market)
 
     levers = spec.levers or benchmarks.get("levers", {})
     goals = _parse_floats(args.goal) if args.goal else levers.get("goal_achievement", [0.8, 1.0, 1.2])
@@ -88,6 +90,36 @@ def cmd_scenario(args):
     print(f"\n리포트 생성: {path}")
 
 
+def cmd_backtest(args):
+    spec, history, benchmarks, raw, market = _load(args.spec)
+    min_train = args.min_train
+    target = args.target
+    min_cv = float(raw.get("min_cv", 0.15))
+    print(f"\n[{spec.title}] 백테스트 (사후예측, min_train={min_train}, "
+          f"목표 커버리지 {target:.0%})")
+    per_product = {}
+    for p in spec.products:
+        res = backtest.backtest_product(history, p, raw, market, min_train=min_train)
+        s = backtest.summarize(res)
+        cv = backtest.suggested_cv(res, target)
+        per_product[p.label] = (p.base_mode, res, s, cv)
+        print(f"\n=== {p.label} (base_mode={p.base_mode}) ===")
+        if not res:
+            print("  평가 가능한 회차 없음(학습표본 부족)")
+            continue
+        print(f"{'회차':>8}{'실제':>10}{'예측(기준)':>12}{'오차%':>9}{'밴드내':>7}")
+        for r in res:
+            print(f"{r['round']:>8}{fmt_n(r['actual']):>10}{fmt_n(r['pred_base']):>12}"
+                  f"{r['ape']*100:>8.1f}%{'  O' if r['in_band'] else '  X':>7}")
+        print(f"  MAPE {s['mape']*100:.1f}% | 편향 {s['bias']*100:+.1f}% | "
+              f"밴드 커버리지 {s['coverage']*100:.0f}% (n={s['n']})")
+        print(f"  현재 min_cv={min_cv:.2f} → 목표 커버리지 위한 경험적 CV≈{cv:.2f}")
+
+    md = report.build_backtest_report(spec, per_product, min_train, target, min_cv)
+    path = report.write_backtest_report(spec, md)
+    print(f"\n백테스트 리포트 생성: {path}")
+
+
 def main(argv=None):
     ap = argparse.ArgumentParser(prog="event_budget", description="이벤트 신청고객수·예산 예측")
     sub = ap.add_subparsers(dest="cmd", required=True)
@@ -104,6 +136,14 @@ def main(argv=None):
     ps.add_argument("--round", help="특정 회차만")
     ps.add_argument("--product", help="특정 상품(name)만")
     ps.set_defaults(func=cmd_scenario)
+
+    pb = sub.add_parser("backtest", help="사후예측 정확도(MAPE·커버리지) 검증")
+    pb.add_argument("spec", help="이벤트 명세 YAML 경로")
+    pb.add_argument("--min-train", type=int, default=4, dest="min_train",
+                    help="평가에 필요한 최소 학습 회차 수 (기본 4)")
+    pb.add_argument("--target", type=float, default=0.8,
+                    help="목표 밴드 커버리지 (기본 0.8)")
+    pb.set_defaults(func=cmd_backtest)
 
     args = ap.parse_args(argv)
     args.func(args)

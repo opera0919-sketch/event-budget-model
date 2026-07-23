@@ -54,9 +54,31 @@ take_rate      = 신청고객수 / 기준고객수(종료연월)
 이벤트 진행 중이면 진행률 대비 누적 신청자를 포화 곡선(로지스틱/선형)으로 외삽해
 최종 신청자를 갱신한다 → 예산 조기 경보.
 
-### (향후) 시장 지표 결합
-`data/market.csv`에 거래대금·지수·변동성이 쌓이면 `demand.market_multiplier`가
-take-rate 배수(강세장·거래대금↑ → 참여↑)를 반환하도록 확장한다. 현재 기본은 중립(1.0).
+### 시장·거시 지표 결합 (#2, `demand.market_multiplier`)
+`data/market.csv`에 회차별 **거래대금·KOSPI·변동성**을 채우고 `benchmarks.yaml`의
+`market.*_elasticity`를 >0으로 설정하면 활성화된다.
+```
+market_mult(회차) = Π (지표 / 학습기간평균)^탄력성
+```
+- 학습(실적) 회차의 take-rate를 **시장중립화**(관측rate ÷ market_mult)한 뒤, 예측 회차의
+  시장 시나리오 배수를 다시 곱한다 → 장세 효과를 이중계상 없이 반영.
+- **탄력성 0(기본)이면 배수=1.0 → 결과 불변**(OFF). 실데이터 없을 때 임의값을 넣지 않음.
+- 예측 회차의 시장 지표는 시나리오 가정으로 입력(없으면 중립).
+
+### 분모 분해 (#4, `Product.base_mode`)
+take-rate 분모 선택: `total_end`(종료 고객수, 기본) · `start`(시작 고객수) · `net_new`(순증=end−start).
+`net_new`/`start`는 `base_col_start` 필요. 어느 분모가 take-rate를 더 안정적으로 만드는지는
+백테스트(§7)로 비교해 고른다. 신규/기존 완전 분리는 별도 데이터 컬럼 필요(향후 확장).
+
+### 지급갭 실측 (#4, `calibrate.calibrate_payout_rate`)
+`Product.payout_rate_col`(회차별 실지급률 = 실지급/신청) 실적이 있으면 평균을 계산해
+`reward_payout_rate` 기준 레버를 대체한다. 없으면 가정값(레버) 사용.
+
+### 백테스트·밴드 검증 (#7, `backtest.py`)
+각 실적 회차를 **그 이전 데이터만**으로 2단계 예측(누수 방지: t 이후 공란 처리 + 절단 이력 보정)해
+실제와 비교 → **MAPE·편향(bias)·밴드 커버리지** 산출. `cli backtest`로 실행.
+- 편향 양(+) = 과소예측. 커버리지가 목표보다 낮으면 제안 CV로 `min_cv`를 넓혀 밴드 신뢰도 보정.
+- base_mode·시장결합 설정을 바꿔가며 어느 구성이 MAPE가 낮은지 선택하는 기준으로 사용.
 
 ---
 
@@ -100,6 +122,9 @@ python -m event_budget.cli estimate events/2026_pension_irp.yaml
 python -m event_budget.cli scenario events/2026_pension_irp.yaml \
     --goal 0.8,1.0,1.2 --payout 0.6,0.7,0.8 --reward 40000,50000
 
+# 백테스트(사후예측 정확도·밴드 커버리지 검증)
+python -m event_budget.cli backtest events/2026_pension_irp.yaml --min-train 3 --target 0.8
+
 pytest tests/
 ```
 
@@ -118,8 +143,16 @@ pytest tests/
 
 ---
 
-## 6. 한계
+## 6. 한계 · 백테스트가 드러낸 것
 
-- **IRP는 회차 변동성이 큼**(특히 `_01`: 2025_01 2.19% vs 2026_01 0.98%) → 밴드가 넓다.
-- 시장 지표가 아직 결합되지 않아 강세/약세장 효과는 최근추세에 간접 반영될 뿐이다.
-- 실적 회차가 적어(시즌당 1~2개) 시즌 평균의 표본이 작다. 회차 누적으로 개선된다.
+현재 데이터셋 백테스트(`cli backtest`) 결과:
+- **연금저축**: MAPE ~19%, 편향 **+26%(과소예측)** — take-rate 상승추세를 블렌드가 다 못 따라감.
+- **IRP**: MAPE ~44%(변동성 큼, 특히 2026_01 급락이 큰 오차).
+- **밴드가 좁음**: 현재 `min_cv=0.15`로 커버리지 ~50% (목표 80%). 경험적 CV ≈ **0.30~0.35** 필요.
+  → 편성 신뢰도를 위해 `min_cv`를 이 수준으로 넓히는 것을 권고.
+
+개선 방향(우선순위):
+1. **이벤트 오퍼 속성**(리워드 금액·조건 난이도·프로모션)을 take-rate feature로 → 최대 효과.
+2. **시장 지표 실데이터** 채워 `market.*_elasticity` 활성화 → IRP 변동성 설명.
+3. 시즌 표본 부족은 회차 누적으로 개선. `min_cv` 상향으로 밴드 신뢰도 즉시 보정.
+4. 과소예측 편향은 `blend_recent_weight` 상향 또는 명시적 추세항 도입으로 완화.

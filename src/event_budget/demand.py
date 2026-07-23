@@ -132,35 +132,134 @@ def blended_take_rate(season: int, seas_rates: dict, recent: float,
     return base_tr * (1 - cv), base_tr, base_tr * (1 + cv)
 
 
-def market_multiplier(market_row: dict | None) -> float:
-    """시장 지표 → 수요 배수. 현재는 중립(1.0) 기본.
+# ---------- #2 시장·거시 지표 결합 ----------
+def market_multiplier(market_row: dict | None, baseline: dict | None = None,
+                      cfg: dict | None = None) -> float:
+    """시장 지표 → 수요 배수. 기준대비 배수 = Π (지표/기준)^탄력성.
 
-    시장 지표 컬럼(거래대금·지수)이 충분히 쌓이면 calibrate에서 탄력성을 추정해
-    여기서 배수를 반환하도록 확장한다.
+    탄력성(cfg)이 0이거나 데이터가 없으면 중립(1.0) → 결과 불변(기본 OFF).
+    turnover(거래대금)↑·index↑ → 참여↑(양의 탄력성), vkospi(변동성)는 보통 음.
     """
-    return 1.0
+    if not market_row or not baseline or not cfg:
+        return 1.0
+    mult = 1.0
+    pairs = [
+        ("turnover_avg_bil", "turnover", cfg.get("turnover_elasticity", 0.0)),
+        ("kospi_avg", "kospi", cfg.get("index_elasticity", 0.0)),
+        ("vkospi_avg", "vkospi", cfg.get("vkospi_elasticity", 0.0)),
+    ]
+    for col, bkey, elas in pairs:
+        v, b = market_row.get(col), baseline.get(bkey)
+        if elas and v and b:
+            mult *= (v / b) ** elas
+    return mult
+
+
+def market_baseline(market: dict | None, training_rounds: set[str]) -> dict | None:
+    """학습(실적) 회차의 시장 지표 평균을 기준값으로."""
+    if not market:
+        return None
+
+    def mean_of(col):
+        vals = [m[col] for rnd, m in market.items()
+                if rnd in training_rounds and m.get(col) is not None]
+        return sum(vals) / len(vals) if vals else None
+
+    return {"turnover": mean_of("turnover_avg_bil"),
+            "kospi": mean_of("kospi_avg"),
+            "vkospi": mean_of("vkospi_avg")}
+
+
+# ---------- #4 분모 분해(base_mode) ----------
+def base_value(row: dict, product) -> float | None:
+    """product.base_mode에 따른 기준값.
+
+    total_end(기본): 종료연월 고객수 / start: 시작연월 고객수 / net_new: 순증(end-start).
+    """
+    mode = getattr(product, "base_mode", "total_end")
+    if mode == "start":
+        return row.get(product.base_col_start)
+    if mode == "net_new":
+        e, s = row.get(product.base_col_end), row.get(product.base_col_start)
+        if e is None or s is None:
+            return None
+        return e - s
+    return row.get(product.base_col_end)
+
+
+def _season_growth_values(history: list[dict], value_fn) -> dict:
+    obs = [(r, value_fn(r)) for r in history if value_fn(r) is not None]
+    by_season: dict[int, list[float]] = {}
+    for i in range(1, len(obs)):
+        (_, vp), (rc, vc) = obs[i - 1], obs[i]
+        if vp:
+            by_season.setdefault(rc["season"], []).append(vc / vp)
+    return {s: sum(v) / len(v) for s, v in by_season.items()}
+
+
+def project_values(history: list[dict], value_fn) -> dict:
+    """임의의 기준값 시계열을 시즌 성장률로 순차 투영(project_base의 일반화)."""
+    observed_idx = [i for i, r in enumerate(history) if value_fn(r) is not None]
+    if not observed_idx:
+        raise ValueError("기준값 투영 불가: 실적이 없음")
+    factors = _season_growth_values(history, value_fn)
+    avg = sum(factors.values()) / len(factors) if factors else 1.0
+    last = max(observed_idx)
+    cur = value_fn(history[last])
+    out: dict = {}
+    for r in history[last + 1:]:
+        cur = cur * factors.get(r["season"], avg)
+        out[r["round"]] = cur
+    return out
+
+
+def _neutral_rate_series(history, product, exclude, market, baseline, mcfg):
+    """(round, season, 시장중립 take_rate) 리스트. 시장중립 = 관측rate / market_mult."""
+    out = []
+    for r in history:
+        if r["round"] in exclude:
+            continue
+        b, a = base_value(r, product), r.get(product.applicants_col)
+        if b is None or a is None or b <= 0:
+            continue
+        mm = market_multiplier(market.get(r["round"]) if market else None, baseline, mcfg)
+        out.append((r["round"], r["season"], (a / b) / mm))
+    return out
 
 
 def predict_product(history: list[dict], product, benchmarks: dict,
-                    forecast_rounds: list[str]) -> ProductForecast:
+                    forecast_rounds: list[str], market: dict | None = None) -> ProductForecast:
     exclude = set(benchmarks.get("exclude_rounds", []))
     w = float(benchmarks.get("blend_recent_weight", 0.5))
     window = int(benchmarks.get("recent_window", 4))
     min_cv = float(benchmarks.get("min_cv", 0.15))
     bench_tr = (benchmarks.get("take_rate", {}) or {}).get(product.name, {})
+    mcfg = benchmarks.get("market", {}) or {}
 
-    base = project_base(history, product.base_col_end, forecast_rounds)
-    seas_rates = season_take_rates(history, product.base_col_end,
-                                   product.applicants_col, exclude)
-    recent = recent_take_rate(history, product.base_col_end,
-                              product.applicants_col, exclude, window)
+    # 시장 기준값: 실적(applicants 존재) 회차 평균
+    training = {r["round"] for r in history if r.get(product.applicants_col) is not None}
+    baseline = market_baseline(market, training)
 
-    fc = _forecast_rows(history, product.base_col_end, forecast_rounds)
-    take = {}
-    appl = {}
+    # Stage1: 선택한 base_mode 기준값 투영
+    base = project_values(history, lambda r: base_value(r, product))
+
+    # Stage2: 시장중립 take-rate 블렌드
+    neutral = _neutral_rate_series(history, product, exclude, market, baseline, mcfg)
+    seas_rates: dict[int, list] = {}
+    for rnd, s, rate in neutral:
+        seas_rates.setdefault(s, []).append((rnd, rate))
+    series = [rate for _, _, rate in neutral]
+    if not series:
+        raise ValueError("take_rate 실적이 없어 예측 불가")
+    recent = sum(series[-window:]) / len(series[-window:])
+
+    fc = [r for r in history if r["round"] in set(forecast_rounds)]
+    take, appl = {}, {}
     for r in fc:
         rnd, s = r["round"], r["season"]
-        tr = blended_take_rate(s, seas_rates, recent, w, min_cv, bench_tr)
+        tr_neutral = blended_take_rate(s, seas_rates, recent, w, min_cv, bench_tr)
+        mm = market_multiplier(market.get(rnd) if market else None, baseline, mcfg)
+        tr = tuple(t * mm for t in tr_neutral)      # 예측 회차 시장상황 재적용
         take[rnd] = tr
         b = base[rnd]
         appl[rnd] = tuple(b * t for t in tr)

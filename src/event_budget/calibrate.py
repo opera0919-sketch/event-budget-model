@@ -35,3 +35,18 @@ def apply_calibration(history: list[dict], products, benchmarks: dict) -> dict:
     for p in products:
         out["take_rate"][p.name] = calibrate_take_rate(history, p, benchmarks)
     return out
+
+
+def calibrate_payout_rate(history: list[dict], product, exclude: set[str] | None = None):
+    """(#4 지급갭 실측) product.payout_rate_col 실적이 있으면 평균 실지급률 반환.
+
+    실지급률 = 실제 지급자 / 신청자. 값이 없으면 None → 레버(가정값) 사용.
+    회차가 쌓이면 이 실측값이 reward_payout_rate 기준값을 대체한다.
+    """
+    col = getattr(product, "payout_rate_col", None)
+    if not col:
+        return None
+    exclude = exclude or set()
+    vals = [r[col] for r in history
+            if r["round"] not in exclude and r.get(col) is not None]
+    return sum(vals) / len(vals) if vals else None

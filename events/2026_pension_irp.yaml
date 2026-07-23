@@ -15,13 +15,18 @@ products:
   - name: pension
     label: 연금저축
     base_col_end: pension_end            # take-rate 분모 = 종료연월 고객수
+    base_col_start: pension_start        # (선택) base_mode=net_new/start 용
+    base_mode: total_end                 # total_end | start | net_new(순증) — 분모 분해(#4)
     applicants_col: pension_applicants   # take-rate 분자 = 신청고객수
     avg_reward: 40000                    # 평균 리워드 금액(원/인) — 실제 이벤트값으로 대체
     fixed_costs: 0                       # 제작·배송 등 고정비(원)
     tax_rate: 0.0                        # 현금성 0.0 / 경품 0.22(제세공과금)
+    # payout_rate_col: pension_payout_rate  # (선택) 회차별 실지급률 실적 → 지급률 보정(#4)
   - name: irp
     label: IRP
     base_col_end: irp_end
+    base_col_start: irp_start
+    base_mode: total_end
     applicants_col: irp_applicants
     avg_reward: 50000
     fixed_costs: 0
