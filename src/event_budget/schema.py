@@ -138,7 +138,18 @@ def load_market(path: Optional[str]) -> dict:
             rnd = (r.get("round") or "").strip()
             if rnd == "" or rnd.startswith("#"):
                 continue
-            out[rnd] = {k: _num(v) for k, v in r.items() if k != "round"}
+            row: dict = {}
+            for k, v in r.items():
+                if k == "round":
+                    continue
+                if k == "month_end":          # 날짜 문자열은 그대로 보관
+                    row[k] = (v or "").strip() or None
+                else:
+                    try:
+                        row[k] = _num(v)
+                    except ValueError:
+                        row[k] = None         # 비수치 값은 무시(중립 처리)
+            out[rnd] = row
     return out
 
 
