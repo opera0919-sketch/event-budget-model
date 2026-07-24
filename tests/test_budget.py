@@ -4,8 +4,11 @@ import sys
 
 sys.path.insert(0, os.path.join(os.path.dirname(__file__), "..", "src"))
 
-from event_budget.budget import compute_budget, compute_payout_tiered
+from event_budget.budget import (compute_budget, compute_budget_funnel,
+                                  compute_payout_tiered, payout_from_funnel)
+from event_budget.calibrate import calibrate_funnel_rates
 from event_budget.scenario import scenario_grid, three_scenario, tornado
+from event_budget.schema import load_reference_events
 
 
 def test_compute_budget_matches_hand_calc():
@@ -63,6 +66,32 @@ def test_three_scenario_ordered():
                         {"goal_achievement": [0.8, 1.0, 1.2],
                          "reward_payout_rate": [0.6, 0.7, 0.8]}, 40_000)
     assert sc["보수"]["total"] < sc["기준"]["total"] < sc["낙관"]["total"]
+
+
+def test_funnel_budget_two_stage():
+    # 신청 10,000 × 전환율 62% × 조건충족 44% × 10만원
+    res = compute_budget_funnel(10_000, 0.62, 0.44, 100_000)
+    assert abs(payout_from_funnel(0.62, 0.44) - 0.2728) < 1e-9
+    assert abs(res.recipients - 2_728) < 1e-6              # 당첨(조건충족)
+    assert abs(res.total - 2_728 * 100_000) < 1e-3
+
+
+def test_funnel_vs_single_stage_overcount():
+    # 전환율만 곱하면(조건충족 무시) 당첨/순입금 만큼 과대
+    single = compute_budget(10_000, 1.0, 0.62, 100_000).total   # 순입금 전원지급 가정
+    funnel = compute_budget_funnel(10_000, 0.62, 0.44, 100_000).total
+    assert abs(single / funnel - 1 / 0.44) < 1e-6
+
+
+def test_calibrate_funnel_from_reference():
+    rows = load_reference_events()
+    assert len(rows) == 10
+    r = calibrate_funnel_rates(rows)
+    # 합산 전환율 ~62%, 조건충족 ~44%, 지급률 ~28%, 리워드/당첨 ~11.5만
+    assert 0.60 < r["conversion_rate"] < 0.65
+    assert 0.42 < r["condition_rate"] < 0.46
+    assert 0.26 < r["payout_rate"] < 0.29
+    assert 100_000 < r["reward_per_winner"] < 125_000
 
 
 def test_tornado_ranks_by_swing():

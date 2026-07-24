@@ -18,9 +18,13 @@ products:
     base_col_start: pension_start        # (선택) base_mode=net_new/start 용
     base_mode: total_end                 # total_end | start | net_new(순증) — 분모 분해(#4)
     applicants_col: pension_applicants   # take-rate 분자 = 신청고객수
-    avg_reward: 40000                    # 평균 리워드 금액(원/인) — 실제 이벤트값으로 대체
+    avg_reward: 100000                   # 당첨(조건충족) 1인당 리워드(제세 포함) — 실적 평균 ~11.5만원
     fixed_costs: 0                       # 제작·배송 등 고정비(원)
-    tax_rate: 0.0                        # 현금성 0.0 / 경품 0.22(제세공과금)
+    tax_rate: 0.0                        # avg_reward가 제세 포함이면 0
+    # 지급 퍼널(순입금·조건충족 전원지급형): 신청 → 전환율 → 조건충족(당첨) → 전원지급
+    # 실적(reference_deposit_events.csv) 보정값: 전환율 62%, 조건충족 44% → 지급률 27.6%
+    conversion_rate: 0.62                # 순입금/신청
+    condition_rate: 0.44                 # 당첨(조건충족)/순입금
     # payout_rate_col: pension_payout_rate  # (선택) 회차별 실지급률 실적 → 지급률 보정(#4)
   - name: irp
     label: IRP
@@ -28,9 +32,11 @@ products:
     base_col_start: irp_start
     base_mode: total_end
     applicants_col: irp_applicants
-    avg_reward: 50000
+    avg_reward: 100000
     fixed_costs: 0
     tax_rate: 0.0
+    conversion_rate: 0.62                # ※ IRP 실적 미보유 → 연금저축 실적값 차용(가정)
+    condition_rate: 0.44
 
 # 예산 시나리오 레버(생략 시 params/benchmarks.yaml 기본값 사용)
 # goal_achievement: 목표 달성률 / reward_payout_rate: 리워드 지급률

@@ -36,6 +36,26 @@ def compute_budget(applicants: float, goal_achievement: float,
     )
 
 
+def payout_from_funnel(conversion_rate: float, condition_rate: float) -> float:
+    """리워드 지급률 = 전환율(순입금/신청) × 조건충족률(당첨/순입금)."""
+    return conversion_rate * condition_rate
+
+
+def compute_budget_funnel(applicants: float, conversion_rate: float,
+                          condition_rate: float, avg_reward: float,
+                          goal_achievement: float = 1.0,
+                          fixed_costs: float = 0.0, tax_rate: float = 0.0) -> BudgetResult:
+    """순입금·조건충족 '전원지급'형 이벤트 예산(연금저축 이벤트 실제 구조).
+
+    지급대상자(당첨=조건충족자) = 신청 × goal × 전환율 × 조건충족률.
+    리워드는 조건 충족자 전원에게 지급(추첨 없음). avg_reward는 제세공과금 포함 단가이면
+    tax_rate=0. 반환 recipients는 '당첨(조건충족)고객수'에 해당.
+    """
+    payout = payout_from_funnel(conversion_rate, condition_rate)
+    return compute_budget(applicants, goal_achievement, payout, avg_reward,
+                          fixed_costs, tax_rate)
+
+
 def compute_payout_tiered(recipients: float, tiers: list[dict],
                           cap_type: str = "all", cap_value: float | None = None,
                           tax_rate: float = 0.0, fixed_costs: float = 0.0) -> float:

@@ -59,20 +59,25 @@ def build_report(spec, forecasts: dict, benchmarks: dict) -> str:
     for p in spec.products:
         fc = forecasts[p.name]
         L.append("")
+        funnel = p.conversion_rate is not None and p.condition_rate is not None
+        recip_label = "지급대상자(당첨)" if funnel else "지급대상자"
+        note = (f", 지급퍼널=전환율 {p.conversion_rate:.0%}×조건충족 {p.condition_rate:.0%}"
+                f"→지급률 {p.conversion_rate*p.condition_rate:.1%}") if funnel else ""
         L.append(f"### {p.label}  (avg_reward={fmt_won(p.avg_reward)}"
                  + (f", tax={p.tax_rate:.0%}" if p.tax_rate else "")
                  + (f", 고정비={fmt_won(p.fixed_costs)}" if p.fixed_costs else "")
-                 + ")")
+                 + note + ")")
         L.append("")
-        L.append("| 회차 | 시나리오 | 신청자 | 목표달성률 | 지급률 | 지급대상자 | 총예산 |")
+        L.append(f"| 회차 | 시나리오 | 신청자 | 목표달성률 | 지급률 | {recip_label} | 총예산 |")
         L.append("|---|---|---|---|---|---|---|")
         for rnd in fc.rounds:
             band = fc.applicants[rnd]
-            sc = three_scenario(band, levers, p.avg_reward, p.fixed_costs, p.tax_rate)
+            sc = three_scenario(band, levers, p.avg_reward, p.fixed_costs, p.tax_rate,
+                                p.conversion_rate, p.condition_rate)
             for nm in ["보수", "기준", "낙관"]:
                 s = sc[nm]
                 L.append(f"| {rnd} | {nm} | {fmt_n(s['applicants'])} | "
-                         f"{s['goal_achievement']:.2f} | {s['reward_payout_rate']:.2f} | "
+                         f"{s['goal_achievement']:.2f} | {s['reward_payout_rate']:.3f} | "
                          f"{fmt_n(s['recipients'])} | {fmt_won(s['total'])} |")
     L.append("")
 
@@ -88,15 +93,19 @@ def build_report(spec, forecasts: dict, benchmarks: dict) -> str:
         fc = forecasts[p.name]
         L.append("")
         L.append(f"### {p.label}")
+        funnel = p.conversion_rate is not None and p.condition_rate is not None
+        payout_base = (p.conversion_rate * p.condition_rate) if funnel else payouts[1]
+        payout_lo, payout_hi = ((payout_base * 0.8, payout_base * 1.2) if funnel
+                                else (payouts[0], payouts[-1]))
         for rnd in fc.rounds:
             a_lo, a_mid, a_hi = fc.applicants[rnd]
             base_levers = {"goal_achievement": goals[1],
-                           "reward_payout_rate": payouts[1],
+                           "reward_payout_rate": payout_base,
                            "avg_reward": p.avg_reward}
             ranges = {
                 "applicants": (a_lo, a_hi),                 # 신청자 보수↔낙관 밴드
                 "goal_achievement": (goals[0], goals[-1]),  # 목표달성률 보수↔낙관
-                "reward_payout_rate": (payouts[0], payouts[-1]),
+                "reward_payout_rate": (payout_lo, payout_hi),
                 "avg_reward": (p.avg_reward * 0.8, p.avg_reward * 1.2),  # 리워드 ±20%
             }
             t = tornado(a_mid, base_levers, ranges, p.fixed_costs, p.tax_rate)

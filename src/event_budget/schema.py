@@ -34,6 +34,8 @@ class Product:
     base_mode: str = "total_end"        # total_end | start | net_new
     base_col_start: str | None = None   # net_new/start 모드에 필요
     payout_rate_col: str | None = None  # (선택) 회차별 실지급률 실적 컬럼
+    conversion_rate: float | None = None  # 순입금/신청 (지급 퍼널 1단계)
+    condition_rate: float | None = None   # 당첨(조건충족)/순입금 (지급 퍼널 2단계)
 
 
 @dataclass
@@ -73,6 +75,8 @@ def load_spec(path: str) -> EventSpec:
                 base_mode=p.get("base_mode", "total_end"),
                 base_col_start=p.get("base_col_start"),
                 payout_rate_col=p.get("payout_rate_col"),
+                conversion_rate=p.get("conversion_rate"),
+                condition_rate=p.get("condition_rate"),
             )
         )
         if products[-1].base_mode in ("start", "net_new") and not products[-1].base_col_start:
@@ -151,6 +155,26 @@ def load_market(path: Optional[str]) -> dict:
                         row[k] = None         # 비수치 값은 무시(중립 처리)
             out[rnd] = row
     return out
+
+
+def load_reference_events(path: str = "data/reference_deposit_events.csv") -> list[dict]:
+    """참고 실적(연금저축 이벤트 실행 실적) CSV → 행 리스트. 주석 행 제외."""
+    full = _resolve(path)
+    if not os.path.exists(full):
+        return []
+    rows: list[dict] = []
+    with open(full, "r", encoding="utf-8") as f:
+        reader = csv.DictReader(f)
+        for r in reader:
+            label = (r.get("round_label") or "").strip()
+            if label == "" or label.startswith("#"):
+                continue
+            row: dict = {"round_label": label, "period": (r.get("period") or "").strip()}
+            for k in ("budget_eok", "applicants", "deposit_customers",
+                      "condition_customers", "net_deposit_eok", "avg_deposit_man"):
+                row[k] = _num(r.get(k, ""))
+            rows.append(row)
+    return rows
 
 
 def load_benchmarks(path: str = "params/benchmarks.yaml") -> dict:

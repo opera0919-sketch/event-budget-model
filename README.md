@@ -31,6 +31,9 @@ pytest tests/
   `params/benchmarks.yaml`의 `market.*_elasticity`를 >0으로 설정하면 장세 효과 반영(기본 OFF).
 - **분모 분해**(#4): 명세의 `base_mode`를 `total_end`/`start`/`net_new`로 바꿔 take-rate 분모 선택.
 - **백테스트**(#7): `backtest` 명령으로 MAPE·편향·밴드 커버리지 측정 → `min_cv` 등 보정.
+- **지급 퍼널형 예산**: 순입금·조건충족 전원지급 이벤트는 명세에 `conversion_rate`(전환율)·
+  `condition_rate`(조건충족률)를 지정하면 `예산 = 신청 × 전환율 × 조건충족률 × 리워드`로 계산.
+  실적 보정값은 `data/reference_deposit_events.csv`(10회차) 참조 — 전환율 62%·조건충족 44%.
 
 ## 구조
 

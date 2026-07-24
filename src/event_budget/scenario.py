@@ -28,24 +28,29 @@ def scenario_grid(applicants: float, goal_values: list[float],
 
 def three_scenario(applicants_by_band: tuple[float, float, float],
                    levers: dict, avg_reward: float,
-                   fixed_costs: float = 0.0, tax_rate: float = 0.0) -> dict:
+                   fixed_costs: float = 0.0, tax_rate: float = 0.0,
+                   conversion_rate: float | None = None,
+                   condition_rate: float | None = None) -> dict:
     """보수/기준/낙관 정렬 시나리오.
 
     applicants_by_band = (보수, 기준, 낙관) 신청자.
-    levers[goal_achievement], levers[reward_payout_rate] = [보수, 기준, 낙관].
-    같은 인덱스(보수↔보수)를 묶어 3개 대표 시나리오 예산 산출.
+    기본: 지급률 = levers[reward_payout_rate][i].
+    퍼널 지정 시(conversion_rate·condition_rate 둘 다): 지급률 = 전환율 × 조건충족률
+    (순입금·조건충족 전원지급형 이벤트), 지급대상자 = 당첨(조건충족)고객.
     """
     goals = levers.get("goal_achievement", [0.8, 1.0, 1.2])
     payouts = levers.get("reward_payout_rate", [0.6, 0.7, 0.8])
+    use_funnel = conversion_rate is not None and condition_rate is not None
     names = ["보수", "기준", "낙관"]
     out = {}
     for i, nm in enumerate(names):
         a = applicants_by_band[i]
-        res = compute_budget(a, goals[i], payouts[i], avg_reward, fixed_costs, tax_rate)
+        payout = conversion_rate * condition_rate if use_funnel else payouts[i]
+        res = compute_budget(a, goals[i], payout, avg_reward, fixed_costs, tax_rate)
         out[nm] = {
             "applicants": a,
             "goal_achievement": goals[i],
-            "reward_payout_rate": payouts[i],
+            "reward_payout_rate": payout,
             "avg_reward": avg_reward,
             "recipients": res.recipients,
             "total": res.total,

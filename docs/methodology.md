@@ -102,9 +102,25 @@ take-rate 분모 선택: `total_end`(종료 고객수, 기본) · `start`(시작
 | `reward_payout_rate` | 리워드 지급률(신청자 중 실지급 비율) | 0.6 / 0.7 / 0.8 |
 | `avg_reward` | 평균 리워드 금액(원/인) | 이벤트별 지정 |
 
-- `tax_rate`: 현금성 0.0, 경품·상품권 0.22(제세공과금).
+- `tax_rate`: 현금성 0.0, 경품·상품권 0.22. **avg_reward가 제세 포함 단가면 0**.
 - **시나리오 테스트**: `scenario.scenario_grid`로 세 레버 전 조합 예산 매트릭스,
   `scenario.three_scenario`로 보수/기준/낙관 정렬 시나리오, `scenario.tornado`로 민감도.
+
+### 지급 퍼널형 예산 — 순입금·조건충족 전원지급 이벤트 (`budget.compute_budget_funnel`)
+연금저축 이벤트 실제 구조는 **추첨이 아니라 조건 충족 시 전원 지급**이다. 지급률을 한 값으로 두지 않고
+2단계로 분해한다(명세에 `conversion_rate`·`condition_rate` 지정 시 리포트가 이 방식 사용).
+```
+당첨(조건충족)고객 = 신청 × goal × 전환율(순입금/신청) × 조건충족률(당첨/순입금)
+예산 = 당첨고객 × avg_reward(당첨 1인당, 제세 포함)
+```
+- 실적 보정값(`data/reference_deposit_events.csv`, 10회차): **전환율 62% · 조건충족률 44% → 지급률 27.6%**,
+  당첨 1인당 리워드 평균 **≈11.5만원**. `calibrate.calibrate_funnel_rates`로 재계산.
+- **주의(교훈)**: 리워드는 순입금고객 전원이 아니라 그중 조건충족자(당첨)에게만 지급된다.
+  지급률에 전환율(62%)을 그대로 쓰면 `순입금/당첨(≈2.26배)` 만큼 예산이 과대해진다.
+
+### (고급) 티어·캡형 리워드 (`budget.compute_payout_tiered`)
+단일 평균리워드 대신 티어별 정밀 산정이 필요할 때. 캡 유형:
+`all`(전원) · `first_come`(선착순 N) · `draw`(추첨 N 고정) · `budget_cap`(예산 상한).
 
 ### (고급) 티어·캡형 리워드 (`budget.compute_payout_tiered`)
 단일 평균리워드 대신 티어별 정밀 산정이 필요할 때. 캡 유형:

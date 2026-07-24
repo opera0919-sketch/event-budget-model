@@ -28,6 +28,25 @@ def calibrate_take_rate(history: list[dict], product, benchmarks: dict) -> dict:
     return calibrated
 
 
+def calibrate_funnel_rates(reference_rows: list[dict]) -> dict:
+    """참고 실적으로 순입금·조건충족 이벤트의 지급 퍼널 비율을 보정.
+
+    전환율(순입금/신청) · 조건충족률(당첨/순입금) · 지급률(당첨/신청) · 당첨 1인당 리워드(원).
+    """
+    if not reference_rows:
+        return {}
+    app = sum(r["applicants"] for r in reference_rows)
+    dep = sum(r["deposit_customers"] for r in reference_rows)
+    win = sum(r["condition_customers"] for r in reference_rows)
+    bud = sum(r["budget_eok"] for r in reference_rows) * 1e8
+    return {
+        "conversion_rate": dep / app if app else None,
+        "condition_rate": win / dep if dep else None,
+        "payout_rate": win / app if app else None,
+        "reward_per_winner": bud / win if win else None,
+    }
+
+
 def apply_calibration(history: list[dict], products, benchmarks: dict) -> dict:
     """모든 product 를 보정해 benchmarks 사본에 반영."""
     out = copy.deepcopy(benchmarks)
