@@ -55,15 +55,21 @@ take_rate      = 신청고객수 / 기준고객수(종료연월)
 최종 신청자를 갱신한다 → 예산 조기 경보.
 
 ### 시장·거시 지표 결합 (#2, `demand.market_multiplier`)
-`data/market.csv`에 회차별 **거래대금·KOSPI·변동성**을 채우고 `benchmarks.yaml`의
-`market.*_elasticity`를 >0으로 설정하면 활성화된다.
+`data/market.csv`에 **KOSPI 월별 실제 데이터**(KRX 주가지수 추이(월), 기준월말일자별)를 채워 두었다.
+`kospi_close`(월말 종가)·`kospi_trade`(월 거래 원자료). KOSDAQ은 중요도 낮아 미포함.
+`benchmarks.yaml`의 `market.index_elasticity`/`trade_elasticity`를 >0으로 설정하면 활성화된다.
 ```
 market_mult(회차) = Π (지표 / 학습기간평균)^탄력성
 ```
 - 학습(실적) 회차의 take-rate를 **시장중립화**(관측rate ÷ market_mult)한 뒤, 예측 회차의
   시장 시나리오 배수를 다시 곱한다 → 장세 효과를 이중계상 없이 반영.
-- **탄력성 0(기본)이면 배수=1.0 → 결과 불변**(OFF). 실데이터 없을 때 임의값을 넣지 않음.
-- 예측 회차의 시장 지표는 시나리오 가정으로 입력(없으면 중립).
+- **탄력성 0(기본)이면 배수=1.0 → 결과 불변**(OFF).
+- 예측 회차(미래)의 시장 지표는 KRX에 없으므로 시나리오 가정으로 입력(없으면 중립).
+
+**실증(현재 데이터, n=7)**: 연금저축 take-rate ↔ KOSPI종가 상관 **+0.59**(약한 양),
+IRP ↔ KOSPI거래 **−0.68**(잡음·역상관, 2026_01 이상치 영향). 표본이 작고 신호가 혼재해
+**탄력성 기본 OFF 유지**를 권고 — 회차 누적 후 회귀로 탄력성을 추정해 켜는 것이 안전.
+주의: `2026_02`(2026-07)은 스냅샷 시점 진행 중 월이라 `kospi_trade`가 과소.
 
 ### 분모 분해 (#4, `Product.base_mode`)
 take-rate 분모 선택: `total_end`(종료 고객수, 기본) · `start`(시작 고객수) · `net_new`(순증=end−start).

@@ -19,18 +19,18 @@ PENSION = Product(name="pension", label="연금저축", base_col_end="pension_en
 def test_market_multiplier_neutral_by_default():
     # 데이터/기준/설정 없으면 항상 1.0
     assert demand.market_multiplier(None) == 1.0
-    assert demand.market_multiplier({"turnover_avg_bil": 20000}, None, None) == 1.0
+    assert demand.market_multiplier({"kospi_trade": 20000}, None, None) == 1.0
     # 탄력성 0이면 값이 있어도 1.0
-    mm = demand.market_multiplier({"turnover_avg_bil": 27000},
-                                  {"turnover": 18000}, {"turnover_elasticity": 0.0})
+    mm = demand.market_multiplier({"kospi_trade": 27000},
+                                  {"trade": 18000}, {"trade_elasticity": 0.0})
     assert mm == 1.0
 
 
 def test_market_multiplier_power_law():
-    mm = demand.market_multiplier({"turnover_avg_bil": 27000},
-                                  {"turnover": 18000}, {"turnover_elasticity": 0.3})
+    mm = demand.market_multiplier({"kospi_trade": 27000},
+                                  {"trade": 18000}, {"trade_elasticity": 0.3})
     assert abs(mm - (27000 / 18000) ** 0.3) < 1e-9
-    assert mm > 1.0                      # 거래대금↑ → 배수>1
+    assert mm > 1.0                      # 거래↑ → 배수>1
 
 
 def test_market_off_gives_identical_prediction():
@@ -46,11 +46,11 @@ def test_market_off_gives_identical_prediction():
 def test_market_bull_raises_forecast():
     hist = _hist()
     bench = dict(load_benchmarks())
-    bench["market"] = {"turnover_elasticity": 0.3}
-    # 학습 회차 거래대금 균일 + 예측회차만 상승 → 배수>1 → 신청 증가
-    market = {r["round"]: {"turnover_avg_bil": 18000}
+    bench["market"] = {"trade_elasticity": 0.3}
+    # 학습 회차 거래 균일 + 예측회차만 상승 → 배수>1 → 신청 증가
+    market = {r["round"]: {"kospi_trade": 18000}
               for r in hist if r.get("pension_applicants") is not None}
-    market["2026_04"] = {"turnover_avg_bil": 27000}
+    market["2026_04"] = {"kospi_trade": 27000}
     base = demand.predict_product(hist, PENSION, bench, ["2026_04"])
     bull = demand.predict_product(hist, PENSION, bench, ["2026_04"], market)
     assert bull.applicants["2026_04"][1] > base.applicants["2026_04"][1]

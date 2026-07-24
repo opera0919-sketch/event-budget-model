@@ -29,10 +29,10 @@ levers:
   reward_payout_rate: [0.6, 0.7, 0.8]
   # avg_reward 는 상품/이벤트별로 명세에서 지정(원)
 
-# 시장·거시 지표 결합(#2). 탄력성이 0이면 시장배수=1.0 → 결과 불변(기본 OFF).
-# data/market.csv에 실적 회차의 지표를 채우고 아래 탄력성을 >0으로 설정하면 활성화.
+# 시장·거시 지표 결합(#2) — KOSPI 월별. 탄력성 0이면 시장배수=1.0 → 결과 불변(기본 OFF).
+# data/market.csv에 KOSPI 지표가 채워져 있으며, 아래 탄력성을 >0으로 설정하면 활성화.
 # 배수 = Π (지표/학습기간평균)^탄력성. 예측 회차 지표는 시나리오로 입력(없으면 중립).
 market:
-  turnover_elasticity: 0.0   # 거래대금(참여수요 핵심 대리변수). 예: 0.3
-  index_elasticity: 0.0      # KOSPI 지수
-  vkospi_elasticity: 0.0     # 변동성(보통 음의 탄력성)
+  index_elasticity: 0.0    # KOSPI 월말 종가(kospi_close)
+  trade_elasticity: 0.0    # KOSPI 월 거래 원자료(kospi_trade)
+  vkospi_elasticity: 0.0   # 변동성지수(현재 데이터 미보유)

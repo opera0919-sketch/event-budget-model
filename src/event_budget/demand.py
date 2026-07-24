@@ -144,9 +144,9 @@ def market_multiplier(market_row: dict | None, baseline: dict | None = None,
         return 1.0
     mult = 1.0
     pairs = [
-        ("turnover_avg_bil", "turnover", cfg.get("turnover_elasticity", 0.0)),
-        ("kospi_avg", "kospi", cfg.get("index_elasticity", 0.0)),
-        ("vkospi_avg", "vkospi", cfg.get("vkospi_elasticity", 0.0)),
+        ("kospi_trade", "trade", cfg.get("trade_elasticity", 0.0)),
+        ("kospi_close", "kospi", cfg.get("index_elasticity", 0.0)),
+        ("vkospi", "vkospi", cfg.get("vkospi_elasticity", 0.0)),
     ]
     for col, bkey, elas in pairs:
         v, b = market_row.get(col), baseline.get(bkey)
@@ -165,9 +165,9 @@ def market_baseline(market: dict | None, training_rounds: set[str]) -> dict | No
                 if rnd in training_rounds and m.get(col) is not None]
         return sum(vals) / len(vals) if vals else None
 
-    return {"turnover": mean_of("turnover_avg_bil"),
-            "kospi": mean_of("kospi_avg"),
-            "vkospi": mean_of("vkospi_avg")}
+    return {"trade": mean_of("kospi_trade"),
+            "kospi": mean_of("kospi_close"),
+            "vkospi": mean_of("vkospi")}
 
 
 # ---------- #4 분모 분해(base_mode) ----------
