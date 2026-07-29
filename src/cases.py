@@ -24,6 +24,35 @@ def _scaled(factor: float) -> List[int]:
     return [snap_reward(r * factor) for r in _BASE]
 
 
+# ---------------------------------------------------------------------------
+# 재검토로 확정한 추천 3안 (직접구간·배수 미적용)
+#   - 경계: config.DIRECT_BRACKETS (9단계)
+#   - 전 제약 통과: 리워드 단위 / 엄격 증가 / 절벽 <= MAX_TIER_JUMP / 유효율 SD
+# ---------------------------------------------------------------------------
+PLAN1_ATTRACT = [20_000, 40_000, 50_000, 100_000, 200_000, 250_000, 300_000, 450_000, 650_000]
+PLAN2_BALANCED = [20_000, 30_000, 50_000, 100_000, 150_000, 200_000, 300_000, 400_000, 500_000]
+PLAN3_EFFICIENT = [20_000, 30_000, 50_000, 100_000, 150_000, 200_000, 250_000, 350_000, 450_000]
+
+
+def _direct(rewards: List[int], name: str) -> RewardStructure:
+    """직접구간(배수 미적용) 구조 생성."""
+    return RewardStructure(
+        tuple(zip(C.DIRECT_BRACKETS, rewards)),
+        1.0,
+        C.CURRENT_MULTIPLIER_THRESHOLD,
+        name,
+    )
+
+
+def recommended_plans() -> List[RewardStructure]:
+    """추천 3안 (매력도우선 / 균형 / 효율우선)."""
+    return [
+        _direct(PLAN1_ATTRACT, "안1_매력도우선"),
+        _direct(PLAN2_BALANCED, "안2_균형"),
+        _direct(PLAN3_EFFICIENT, "안3_효율우선"),
+    ]
+
+
 def reference_cases() -> List[RewardStructure]:
     """대표 케이스 목록(현행 포함)."""
     from src.reward_engine import CURRENT_STRUCTURE

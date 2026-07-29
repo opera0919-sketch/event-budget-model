@@ -143,9 +143,35 @@ def is_monotonic(rewards: Sequence[int]) -> bool:
     return all(rewards[i] <= rewards[i + 1] for i in range(len(rewards) - 1))
 
 
-def is_valid_structure(structure: RewardStructure) -> bool:
-    """단위 제약 + 단조 증가 제약을 모두 만족하는지."""
+def is_strictly_increasing(rewards: Sequence[int]) -> bool:
+    """평탄구간(한계 리워드 0)이 없는지. 구간이 커지면 리워드도 반드시 증가."""
+    return all(rewards[i] < rewards[i + 1] for i in range(len(rewards) - 1))
+
+
+def max_tier_jump(rewards: Sequence[int]) -> float:
+    """인접 티어 간 최대 리워드 배율(경계 절벽 크기). 0 리워드는 건너뛴다."""
+    jumps = [rewards[i + 1] / rewards[i]
+             for i in range(len(rewards) - 1) if rewards[i] > 0]
+    return max(jumps) if jumps else 1.0
+
+
+def is_valid_structure(structure: RewardStructure,
+                       strict_increase: bool = False,
+                       max_jump: float | None = None) -> bool:
+    """설계 제약 충족 여부.
+
+    기본(단위 + 단조 비감소)은 항상 검사한다. 추가 제약은 옵션으로 켠다.
+
+    strict_increase: 평탄구간 금지(엄격 증가) 요구.
+    max_jump: 인접 티어 배율 상한(예: 2.2). None이면 미적용.
+    """
     rewards = structure.rewards()
     if not all(is_valid_reward_unit(r) for r in rewards):
         return False
-    return is_monotonic(rewards)
+    if not is_monotonic(rewards):
+        return False
+    if strict_increase and not is_strictly_increasing(rewards):
+        return False
+    if max_jump is not None and max_tier_jump(rewards) > max_jump + 1e-9:
+        return False
+    return True

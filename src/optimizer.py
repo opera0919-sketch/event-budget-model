@@ -57,6 +57,18 @@ def _make_structure(rewards: Sequence[int], multiplier: float, name: str) -> Rew
 # ---------------------------------------------------------------------------
 # 후보 생성
 # ---------------------------------------------------------------------------
+def _accept(s: RewardStructure) -> bool:
+    """설계 제약 필터.
+
+    단위·단조에 더해 레거시용 완화 절벽 상한(OPTIMIZER_MAX_TIER_JUMP)을 적용한다.
+    신규 설계 목표치(MAX_TIER_JUMP=2.2)를 여기 강제하면 현행 티어 배율(2.50x)을
+    물려받은 탐색 공간이 전멸하므로, 레거시 탐색에서는 완화 상한만 걸고
+    절벽·평탄구간·역진폭은 리포트의 설계 품질 지표로 드러낸다.
+    """
+    return is_valid_structure(s, strict_increase=False,
+                              max_jump=C.OPTIMIZER_MAX_TIER_JUMP)
+
+
 def coarse_candidates() -> List[RewardStructure]:
     seen: set[Signature] = set()
     out: List[RewardStructure] = []
@@ -67,7 +79,7 @@ def coarse_candidates() -> List[RewardStructure]:
                 rewards = [snap_reward(BASE_REWARDS[i] * factors[i]) for i in range(7)]
                 for m in MULTIPLIERS:
                     s = _make_structure(rewards, m, f"C_{fl}_{fm}_{fh}_m{m}")
-                    if not is_valid_structure(s):
+                    if not _accept(s):
                         continue
                     sig = _signature(s)
                     if sig in seen:
@@ -89,7 +101,7 @@ def fine_neighbors(s: RewardStructure) -> List[RewardStructure]:
     for m in MULTIPLIERS:
         if m != s.multiplier:
             out.append(_make_structure(rewards, m, f"F_m{m}"))
-    return [c for c in out if is_valid_structure(c)]
+    return [c for c in out if _accept(c)]
 
 
 # ---------------------------------------------------------------------------
