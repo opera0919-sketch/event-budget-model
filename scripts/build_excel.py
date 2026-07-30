@@ -22,6 +22,83 @@ def _autosize(ws):
         ws.column_dimensions[col[0].column_letter].width = min(max(width + 2, 10), 28)
 
 
+def _write_budget_sheet(wb, datasets, header_font, header_fill) -> None:
+    """예산집행표: 추천안별·구간별 인원/리워드/소요예산 (시나리오 분리).
+
+    탄력성을 반영하지 않은 **보수적 집계**(신청자 유지 가정)다. 예산 승인은
+    이 수치와 worst-case로 요청하는 것이 안전하다.
+    """
+    from openpyxl.styles import Font
+
+    from config import simulation_config as C
+    from src.cases import recommended_plans
+    from src.reward_engine import budget_amount
+
+    ws = wb.create_sheet("예산집행표")
+    bold = Font(bold=True)
+    edges = list(C.DIRECT_BRACKETS)
+    uppers = edges[1:] + [None]
+
+    scenarios = [("전체(평균)", None), ("흥행", "hit"), ("비흥행", "flop")]
+    row = 1
+    for plan in recommended_plans():
+        ws.cell(row=row, column=1, value=f"[{plan.name}]").font = bold
+        row += 1
+        for label, tag in scenarios:
+            subset = [d for d in datasets if tag is None or d.scenario == tag]
+            n_rounds = len(subset)
+            transfers = [t for d in subset for t in d.transfers]
+
+            ws.cell(row=row, column=1, value=f"시나리오: {label} (회차 {n_rounds})").font = bold
+            row += 1
+            headers = ["순입금 구간", "인원(회차평균)", "리워드", "1인예산(제세포함)",
+                       "소요예산", "예산비중"]
+            for c, h in enumerate(headers, start=1):
+                cell = ws.cell(row=row, column=c, value=h)
+                cell.font = header_font
+                cell.fill = header_fill
+            row += 1
+
+            start = row
+            total_budget = 0.0
+            data = []
+            for i, lo in enumerate(edges):
+                hi = uppers[i]
+                group = [t for t in transfers
+                         if lo <= t < (hi if hi is not None else 10 ** 15)]
+                if not group:
+                    continue
+                reward = plan.rewards()[i]
+                per = budget_amount(reward)
+                cnt = len(group) / n_rounds
+                budget = cnt * per
+                total_budget += budget
+                label_txt = f"{lo:,}원 이상" if hi is None else f"{lo:,}~{hi:,}원"
+                data.append((label_txt, cnt, reward, per, budget))
+            for label_txt, cnt, reward, per, budget in data:
+                ws.cell(row=row, column=1, value=label_txt)
+                ws.cell(row=row, column=2, value=round(cnt, 1))
+                ws.cell(row=row, column=3, value=reward)
+                ws.cell(row=row, column=4, value=round(per))
+                ws.cell(row=row, column=5, value=round(budget))
+                ws.cell(row=row, column=6,
+                        value=round(budget / total_budget, 4) if total_budget else 0)
+                ws.cell(row=row, column=6).number_format = "0.0%"
+                row += 1
+            # 합계
+            ws.cell(row=row, column=1, value="합계").font = bold
+            ws.cell(row=row, column=2, value=f"=SUM(B{start}:B{row-1})").font = bold
+            ws.cell(row=row, column=5, value=f"=SUM(E{start}:E{row-1})").font = bold
+            row += 2
+        row += 1
+
+    ws.cell(row=row, column=1,
+            value="주: 탄력성 미반영(신청자 유지 가정) 보수적 집계. "
+                  "모델 추정 예산은 '케이스비교' 시트 참조. "
+                  "예산 확보는 worst-case 기준 권고.")
+    _autosize(ws)
+
+
 def main() -> None:
     try:
         from openpyxl import Workbook
@@ -81,6 +158,9 @@ def main() -> None:
     for k, nm in names.items():
         s = out.objectives[k].structure
         ws_obj.append([nm, s.multiplier, " / ".join(str(r) for r in s.rewards())])
+
+    # 3-1) 예산집행표 (구간별 × 시나리오)
+    _write_budget_sheet(wb, datasets, header_font, header_fill)
 
     # 4) Pareto + 차트
     ws_p = wb.create_sheet("Pareto")

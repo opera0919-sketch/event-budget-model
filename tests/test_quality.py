@@ -6,7 +6,7 @@ import unittest
 sys.path.insert(0, os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
 
 from config import simulation_config as C  # noqa: E402
-from src.cases import recommended_plans  # noqa: E402
+from src.cases import multiplier_keep_plan, recommended_plans  # noqa: E402
 from src.data_generator import generate_all  # noqa: E402
 from src.quality import (  # noqa: E402
     dead_tier_count,
@@ -170,6 +170,85 @@ class TestRecommendedPlans(unittest.TestCase):
         self.assertGreater(ms[1].budget_mean, ms[2].budget_mean)
         self.assertGreater(ms[0].attractiveness_index, ms[1].attractiveness_index)
         self.assertGreater(ms[1].attractiveness_index, ms[2].attractiveness_index)
+
+
+class TestBoundaryAlignment(unittest.TestCase):
+    """경계 불일치 회귀 방지.
+
+    현행은 배수(1.5배)로 실제 순입금 6,667만원에서 30만원으로 점프한다.
+    신규안 경계를 7,000만원에 두면 그 사이 고객이 현행의 50%만 받는다.
+    """
+
+    @classmethod
+    def setUpClass(cls):
+        cls.transfers = [t for d in generate_all() for t in d.transfers]
+
+    def test_boundary_below_current_effective_threshold(self):
+        # 현행 인정 1억 = 실제 6,667만. 경계는 그보다 낮아야 한다.
+        effective = 100_000_000 / C.CURRENT_MULTIPLIER
+        boundaries = C.DIRECT_BRACKETS
+        self.assertTrue(any(b <= effective for b in boundaries if b > 50_000_000),
+                        "6,667만 이하 경계가 없어 하락 구간이 생긴다")
+
+    def test_no_fifty_percent_drop_at_67m(self):
+        """6,600만~7,000만 구간이 게이트 하한을 지켜야 한다.
+
+        경계가 7,000만이던 시절 이 구간은 현행의 50%였다(30만 -> 15만).
+        경계를 6,600만으로 내린 뒤 67%로 회복했다. 50%로 되돌아가면 실패한다.
+        """
+        from src.reward_engine import reward_for
+
+        edges = [66_000_000, 67_000_000, 68_000_000, 69_000_000]
+        for p in recommended_plans():
+            for lo in edges:
+                group = [t for t in self.transfers if lo <= t < lo + 1_000_000]
+                if not group:
+                    continue
+                avg = sum(group) / len(group)
+                cur = reward_for(avg, CURRENT_STRUCTURE)
+                if cur <= 0:
+                    continue
+                ratio = reward_for(avg, p) / cur
+                self.assertGreaterEqual(
+                    ratio, C.MIN_RATIO_VS_CURRENT,
+                    f"{p.name} {lo/1e4:,.0f}만 구간 현행의 {ratio*100:.0f}%")
+
+    def test_precise_grid_is_default(self):
+        """기본 격자가 100만원 단위여야 한다(1천만원 격자는 하락을 가린다)."""
+        self.assertEqual(C.RATIO_CHECK_UNIT, 1_000_000)
+        for p in recommended_plans():
+            coarse = min_ratio_vs_current(p, self.transfers,
+                                          [b * 10_000_000 for b in range(24)])
+            precise = min_ratio_vs_current(p, self.transfers)
+            self.assertLessEqual(precise, coarse + 1e-9,
+                                 "정밀 격자가 더 관대하게 나오면 검증 의미가 없다")
+
+
+class TestMultiplierKeepPlan(unittest.TestCase):
+    """배수 유지안(A안')도 제약을 만족해야 한다."""
+
+    @classmethod
+    def setUpClass(cls):
+        cls.transfers = [t for d in generate_all() for t in d.transfers]
+        cls.plan = multiplier_keep_plan()
+
+    def test_unit_and_monotonic(self):
+        self.assertTrue(is_valid_structure(self.plan, strict_increase=True))
+
+    def test_keeps_multiplier(self):
+        self.assertEqual(self.plan.multiplier, C.CURRENT_MULTIPLIER)
+
+    def test_ratio_floor(self):
+        worst = min_ratio_vs_current(self.plan, self.transfers)
+        self.assertGreaterEqual(worst, C.MIN_RATIO_VS_CURRENT - 1e-9,
+                                f"A안' 현행 대비 {worst*100:.0f}%")
+
+    def test_all_candidates_meet_floor(self):
+        from src.cases import all_candidate_plans
+        for p in all_candidate_plans():
+            worst = min_ratio_vs_current(p, self.transfers)
+            self.assertGreaterEqual(worst, C.MIN_RATIO_VS_CURRENT - 1e-9,
+                                    f"{p.name} 현행 대비 {worst*100:.0f}%")
 
 
 class TestBonusAssumptionSensitivity(unittest.TestCase):

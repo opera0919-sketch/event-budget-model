@@ -185,10 +185,16 @@ def build_markdown(out, caches, case_metrics: List[AggregateMetrics]) -> str:
 
 def _ratio_vs_current_table(plans, transfers) -> str:
     """동일 순입금 고객이 받는 금액을 현행과 비교(매력도 방어 검증)."""
+    from src.cases import multiplier_keep_plan
     from src.quality import ratio_vs_current
     from src.reward_engine import CURRENT_STRUCTURE, reward_for
 
-    ratios = [dict((lo, (r, sh)) for lo, r, sh in ratio_vs_current(p, transfers)) for p in plans]
+    # 배수 유지안을 병기해 '경제성 vs 설계품질' 선택을 볼 수 있게 한다.
+    plans = list(plans) + [multiplier_keep_plan()]
+    # 표는 1천만원 단위로 보여주고(가독성), 게이트는 100만원 격자로 검증한다.
+    coarse = [b * C.BRACKET_WIDTH for b in range(24)]
+    ratios = [dict((lo, (r, sh)) for lo, r, sh in ratio_vs_current(p, transfers, coarse))
+              for p in plans]
     keys = sorted(ratios[0].keys())
 
     L = ["", "### 현행 대비 급간별 리워드 수준 (동일 순입금 고객 기준)\n",
@@ -208,15 +214,25 @@ def _ratio_vs_current_table(plans, transfers) -> str:
             cells.append(f"{mark}{won(reward_for(avg, p))} ({r*100:.0f}%){mark}")
         L.append(f"| {won(lo)}~ | {share*100:.1f}% | {won(cur)} | " + " | ".join(cells) + " |")
     L.append("")
-    L.append(f"- **최저 보장 수준**: 세 안 모두 현행의 **67%** 이상 "
-             f"(게이트 하한 {C.MIN_RATIO_VS_CURRENT*100:.0f}%).")
+    from src.quality import min_ratio_vs_current
+    floors = [(p.name, min_ratio_vs_current(p, transfers)) for p in plans]
+    L.append("표는 1천만원 단위지만, 게이트는 **100만원 격자**로 검증한다 "
+             "(좁은 구간의 하락이 평균에 묻히기 때문).\n")
+    L.append(f"- **최저 보장 수준**(100만원 격자): "
+             + ", ".join(f"{n} {r*100:.0f}%" for n, r in floors)
+             + f" — 게이트 하한 {C.MIN_RATIO_VS_CURRENT*100:.0f}%.")
     L.append("- 67%가 나오는 곳은 세 안 공통으로 **3,000만~5,000만 구간**(인원 21.9%), "
              "안3은 추가로 **7,000만~9,000만 구간**(인원 10.8%)이다. 원인은 리워드 단위 "
              "제약이 10만원과 15만원 사이(그리고 20만원과 30만원 사이) 값을 허용하지 않아 "
              "중간 수준을 만들 수 없다는 것이다. "
              "(3~5천만 구간에 12만원이 허용되면 80% 방어 가능, 예산 +4%p)")
     L.append("- **최상위 2개 티어(1.3억·1.7억 이상)는 현행 수준(60만·100만)으로 방어**했다. "
-             "방어하지 않으면 최고액 고객이 현행의 45~65%까지 떨어진다.\n")
+             "방어하지 않으면 최고액 고객이 현행의 45~65%까지 떨어진다.")
+    L.append("- **6,600만원 경계**는 현행의 실효 경계(인정 1억 = 실제 6,667만)에 맞춘 것이다. "
+             "7,000만원에 두면 6,667만~7,000만 고객이 30만→15만으로 **현행의 50%**가 된다.")
+    L.append("- **A안'(배수 유지)**는 같은 예산대에서 매력도·하락방어가 더 좋으나(96.2%/75%), "
+             "유효율 분산 0.077·절벽 3.00x로 설계품질은 현행 수준에 머문다. "
+             "**경제성 vs 설계품질**의 선택이다.\n")
     return "\n".join(L)
 
 

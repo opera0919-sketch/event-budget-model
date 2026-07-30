@@ -47,13 +47,34 @@ def _direct(rewards: List[int], name: str) -> RewardStructure:
     )
 
 
+# 배수 유지안(A안'): 현행 7단계 구조를 그대로 두고 리워드만 조정.
+#   배수를 폐지하지 않으므로 구조 변경이 최소이고, 현행 대비 하락도 75%까지 방어된다.
+#   대신 배수가 만드는 유효율 분산(0.077)과 경계 절벽(3.00x)은 현행 수준으로 남는다.
+PLAN_MULT_KEEP = [20_000, 30_000, 50_000, 150_000, 250_000, 450_000, 750_000]
+
+
+def multiplier_keep_plan() -> RewardStructure:
+    """배수 유지안 (A안')."""
+    return RewardStructure(
+        tuple(zip([t for t, _ in C.CURRENT_TIERS], PLAN_MULT_KEEP)),
+        C.CURRENT_MULTIPLIER,
+        C.CURRENT_MULTIPLIER_THRESHOLD,
+        "A안_배수유지",
+    )
+
+
 def recommended_plans() -> List[RewardStructure]:
-    """추천 3안 (매력도우선 / 균형 / 효율우선)."""
+    """추천 3안 (매력도우선 / 균형 / 효율우선). 모두 직접구간·배수 폐지."""
     return [
         _direct(PLAN1_ATTRACT, "안1_매력도우선"),
         _direct(PLAN2_BALANCED, "안2_균형"),
         _direct(PLAN3_EFFICIENT, "안3_효율우선"),
     ]
+
+
+def all_candidate_plans() -> List[RewardStructure]:
+    """의사결정용 전체 후보: 배수 폐지 3안 + 배수 유지안."""
+    return recommended_plans() + [multiplier_keep_plan()]
 
 
 def reference_cases() -> List[RewardStructure]:

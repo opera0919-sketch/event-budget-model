@@ -54,7 +54,17 @@ class RateProfile:
 
 
 def _default_edges(width: int = C.BRACKET_WIDTH, n: int = 24) -> List[int]:
+    """유효율 프로파일용 기본 격자(1천만원 단위 24구간)."""
     return [b * width for b in range(n)]
+
+
+def _ratio_edges() -> List[int]:
+    """현행 대비 비율 검증용 정밀 격자(100만원 단위).
+
+    좁은 구간의 하락이 평균에 묻히지 않도록 프로파일용보다 촘촘하게 본다.
+    """
+    step = C.RATIO_CHECK_UNIT
+    return [i * step for i in range(1, C.RATIO_CHECK_MAX // step + 1)]
 
 
 def effective_rate_profile(structure: RewardStructure,
@@ -165,10 +175,13 @@ def ratio_vs_current(structure: RewardStructure,
 
     반환: (급간 하한, 현행 대비 비율, 인원 비중) 목록. 현행 리워드가 0인
     급간(자격 미달)은 제외한다.
+
+    격자는 기본적으로 100만원 단위(`_ratio_edges`)를 쓴다. 1천만원 단위로 보면
+    좁은 구간의 하락이 묻힌다.
     """
     from src.reward_engine import CURRENT_STRUCTURE
 
-    edges = list(edges) if edges is not None else _default_edges()
+    edges = list(edges) if edges is not None else _ratio_edges()
     total = len(transfers)
     uppers = list(edges[1:]) + [10 ** 15]
     out: List[Tuple[int, float, float]] = []
