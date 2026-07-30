@@ -183,6 +183,43 @@ def build_markdown(out, caches, case_metrics: List[AggregateMetrics]) -> str:
     return "\n".join(L)
 
 
+def _ratio_vs_current_table(plans, transfers) -> str:
+    """동일 순입금 고객이 받는 금액을 현행과 비교(매력도 방어 검증)."""
+    from src.quality import ratio_vs_current
+    from src.reward_engine import CURRENT_STRUCTURE, reward_for
+
+    ratios = [dict((lo, (r, sh)) for lo, r, sh in ratio_vs_current(p, transfers)) for p in plans]
+    keys = sorted(ratios[0].keys())
+
+    L = ["", "### 현행 대비 급간별 리워드 수준 (동일 순입금 고객 기준)\n",
+         "현행은 배수(1.5배)로 인정금액을 올려 판정하므로, 구간 체계가 다른 "
+         "신규안과는 '같은 금액을 넣은 고객이 실제로 받는 액수'로 비교해야 한다.\n"]
+    L.append("| 순입금 급간 | 인원 | 현행 | " + " | ".join(p.name for p in plans) + " |")
+    L.append("|---|---|---|" + "---|" * len(plans))
+    for lo in keys:
+        group = [t for t in transfers if lo <= t < lo + C.BRACKET_WIDTH]
+        avg = sum(group) / len(group)
+        cur = reward_for(avg, CURRENT_STRUCTURE)
+        share = ratios[0][lo][1]
+        cells = []
+        for p, rd in zip(plans, ratios):
+            r = rd[lo][0]
+            mark = "**" if r < 0.75 else ""
+            cells.append(f"{mark}{won(reward_for(avg, p))} ({r*100:.0f}%){mark}")
+        L.append(f"| {won(lo)}~ | {share*100:.1f}% | {won(cur)} | " + " | ".join(cells) + " |")
+    L.append("")
+    L.append(f"- **최저 보장 수준**: 세 안 모두 현행의 **67%** 이상 "
+             f"(게이트 하한 {C.MIN_RATIO_VS_CURRENT*100:.0f}%).")
+    L.append("- 67%가 나오는 곳은 세 안 공통으로 **3,000만~5,000만 구간**(인원 21.9%), "
+             "안3은 추가로 **7,000만~9,000만 구간**(인원 10.8%)이다. 원인은 리워드 단위 "
+             "제약이 10만원과 15만원 사이(그리고 20만원과 30만원 사이) 값을 허용하지 않아 "
+             "중간 수준을 만들 수 없다는 것이다. "
+             "(3~5천만 구간에 12만원이 허용되면 80% 방어 가능, 예산 +4%p)")
+    L.append("- **최상위 2개 티어(1.3억·1.7억 이상)는 현행 수준(60만·100만)으로 방어**했다. "
+             "방어하지 않으면 최고액 고객이 현행의 45~65%까지 떨어진다.\n")
+    return "\n".join(L)
+
+
 def _gate_section(caches) -> str:
     """완성도 게이트 체크리스트 — 사양 준수와 설계 제약을 실측으로 재확인."""
     from src.cases import recommended_plans
@@ -237,6 +274,10 @@ def _gate_section(caches) -> str:
     sds = [design_report(p, transfers)["sd"] for p in plans]
     checks.append(("G5.4", f"유효율 SD ≤{C.MAX_RATE_SD}", max(sds) <= C.MAX_RATE_SD + 1e-9,
                    f"최대 {max(sds):.3f} (현행 {q0['sd']:.3f})"))
+    ratios = [design_report(p, transfers)["min_ratio_vs_current"] for p in plans]
+    checks.append(("G5.5", f"현행 대비 리워드 ≥{C.MIN_RATIO_VS_CURRENT*100:.0f}%",
+                   min(ratios) >= C.MIN_RATIO_VS_CURRENT - 1e-9,
+                   f"최저 {min(ratios)*100:.0f}% (3~5천만 구간, 단위 제약 기인)"))
 
     passed = sum(1 for *_, ok, _ in [(c[0], c[1], c[2], c[3]) for c in checks] if ok)
     L = ["## 9. 완성도 게이트 체크리스트\n",
@@ -342,6 +383,9 @@ def _recommended_section(caches) -> str:
     for label, b, vals in rows:
         L.append(f"| {label} | {b} | " + " | ".join(vals) + " |")
     L.append("")
+
+    # 현행 대비 급간별 리워드 비율 (매력도 방어 검증)
+    L.append(_ratio_vs_current_table(plans, transfers))
 
     # 티어 진입 유효율
     L.append("**티어 진입 시점 유효 리워드율(%)** — 평탄할수록 형평성이 높음\n")

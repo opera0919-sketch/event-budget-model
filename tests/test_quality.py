@@ -13,7 +13,9 @@ from src.quality import (  # noqa: E402
     design_report,
     effective_rate_profile,
     max_tier_regression,
+    min_ratio_vs_current,
     rate_dispersion,
+    ratio_vs_current,
     tier_entry_rates,
     tier_regressive_steps,
 )
@@ -71,6 +73,25 @@ class TestRateProfile(unittest.TestCase):
             self.assertEqual(tier_regressive_steps(s), 0)
 
 
+class TestRatioVsCurrent(unittest.TestCase):
+    def test_identity_is_one(self):
+        # 현행을 현행과 비교하면 모든 급간이 100%.
+        transfers = [15_000_000, 60_000_000, 120_000_000]
+        for _, r, _ in ratio_vs_current(CURRENT_STRUCTURE, transfers):
+            self.assertAlmostEqual(r, 1.0, places=9)
+
+    def test_skips_unqualified_brackets(self):
+        # 현행 리워드가 0인 급간(5백만 미만)은 비율 계산에서 제외.
+        rows = ratio_vs_current(CURRENT_STRUCTURE, [3_000_000] * 5)
+        self.assertEqual(rows, [])
+
+    def test_detects_drop(self):
+        half = RewardStructure(((5_000_000, 20_000),), 1.0, 10_000_000, "half")
+        # 1,500만 고객: 현행 4만(배수로 인정 2,250만) vs 2만 -> 50%
+        worst = min_ratio_vs_current(half, [15_000_000] * 10)
+        self.assertAlmostEqual(worst, 0.5, places=6)
+
+
 class TestDeadTier(unittest.TestCase):
     def test_current_top_tier_alive_via_multiplier(self):
         # 최대 순입금 2.39억 * 1.5 = 3.59억 >= 3억 -> 3억 티어 생존.
@@ -118,6 +139,21 @@ class TestRecommendedPlans(unittest.TestCase):
             q = design_report(p, self.transfers)
             self.assertLess(q["sd"], q0["sd"], f"{p.name} 유효율 SD 미개선")
             self.assertLess(q["max_jump"], q0["max_jump"], f"{p.name} 절벽 미개선")
+
+    def test_no_excessive_reward_drop(self):
+        """매력도 방어: 어떤 급간도 현행 대비 하한 미만으로 떨어지지 않아야 한다."""
+        for p in self.plans:
+            worst = min_ratio_vs_current(p, self.transfers)
+            self.assertGreaterEqual(
+                worst, C.MIN_RATIO_VS_CURRENT - 1e-9,
+                f"{p.name} 현행 대비 {worst*100:.0f}%로 과도 하락")
+
+    def test_top_tiers_protected(self):
+        """최상위 2개 티어는 현행 수준(60만/100만)을 방어해야 한다."""
+        for p in self.plans:
+            rewards = p.rewards()
+            self.assertGreaterEqual(rewards[-1], 1_000_000, f"{p.name} 최상단 티어 미방어")
+            self.assertGreaterEqual(rewards[-2], 550_000, f"{p.name} 차상단 티어 미방어")
 
     def test_no_dead_tiers(self):
         for p in self.plans:

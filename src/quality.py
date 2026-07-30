@@ -154,6 +154,44 @@ def dead_tier_count(structure: RewardStructure, transfers: Sequence[int]) -> int
     return sum(1 for th, _ in structure.tiers if th > max_recog)
 
 
+def ratio_vs_current(structure: RewardStructure,
+                     transfers: Sequence[int],
+                     edges: Sequence[int] | None = None) -> List[Tuple[int, float, float]]:
+    """급간별 '현행 대비 리워드 비율'.
+
+    동일 순입금 고객이 실제로 받는 금액을 비교한다. 현행은 배수(1.5배)로
+    인정금액을 올려 판정하므로, 구간 체계가 다른 신규안과는 이 방식으로만
+    공정하게 비교할 수 있다.
+
+    반환: (급간 하한, 현행 대비 비율, 인원 비중) 목록. 현행 리워드가 0인
+    급간(자격 미달)은 제외한다.
+    """
+    from src.reward_engine import CURRENT_STRUCTURE
+
+    edges = list(edges) if edges is not None else _default_edges()
+    total = len(transfers)
+    uppers = list(edges[1:]) + [10 ** 15]
+    out: List[Tuple[int, float, float]] = []
+    for lo, hi in zip(edges, uppers):
+        group = [t for t in transfers if lo <= t < hi]
+        if not group:
+            continue
+        avg = sum(group) / len(group)
+        cur = reward_for(avg, CURRENT_STRUCTURE)
+        if cur <= 0:
+            continue
+        out.append((lo, reward_for(avg, structure) / cur, len(group) / total if total else 0.0))
+    return out
+
+
+def min_ratio_vs_current(structure: RewardStructure,
+                         transfers: Sequence[int],
+                         edges: Sequence[int] | None = None) -> float:
+    """현행 대비 리워드 비율의 최솟값(매력도 방어 게이트용)."""
+    ratios = ratio_vs_current(structure, transfers, edges)
+    return min((r for _, r, _ in ratios), default=1.0)
+
+
 def design_report(structure: RewardStructure,
                   transfers: Sequence[int],
                   edges: Sequence[int] | None = None) -> Dict[str, float]:
@@ -163,4 +201,5 @@ def design_report(structure: RewardStructure,
     out = rate_dispersion(structure, transfers, edges)
     out["dead_tiers"] = float(dead_tier_count(structure, transfers))
     out["max_jump"] = max_tier_jump(structure.rewards())
+    out["min_ratio_vs_current"] = min_ratio_vs_current(structure, transfers, edges)
     return out
