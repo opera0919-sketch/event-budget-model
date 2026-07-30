@@ -61,23 +61,31 @@ class TestBudgetGrossup(unittest.TestCase):
 
 class TestUnitAndMonotonic(unittest.TestCase):
     def test_unit_validity(self):
+        # 단위 규칙은 전 구간 1만원. 현행 구조에 6만원 티어가 실재하므로
+        # '5만원 초과는 5만원 단위'라는 당초 가정은 틀렸다.
         self.assertTrue(is_valid_reward_unit(10_000))
         self.assertTrue(is_valid_reward_unit(50_000))
+        self.assertTrue(is_valid_reward_unit(60_000))    # 현행에 실재
+        self.assertTrue(is_valid_reward_unit(120_000))   # 중간값 사용 가능
         self.assertTrue(is_valid_reward_unit(150_000))
-        self.assertFalse(is_valid_reward_unit(60_000))   # >5만 이면서 5만 단위 아님
-        self.assertFalse(is_valid_reward_unit(15_000))   # <=5만 이면서 1만 단위 아님
+        self.assertFalse(is_valid_reward_unit(15_000))   # 1만원 단위 아님
+        self.assertFalse(is_valid_reward_unit(5_000))
         self.assertTrue(is_valid_reward_unit(0))
+
+    def test_current_structure_passes_unit_rule(self):
+        # 규칙을 바로잡은 뒤에는 현행 구조도 단위 규칙을 만족해야 한다.
+        self.assertTrue(is_valid_structure(CURRENT_STRUCTURE))
 
     def test_snap(self):
         self.assertEqual(snap_reward(25_000), 20_000)
-        self.assertEqual(snap_reward(60_000), 50_000)
-        self.assertEqual(snap_reward(120_000), 100_000)
+        self.assertEqual(snap_reward(62_000), 60_000)
+        self.assertEqual(snap_reward(124_000), 120_000)
         self.assertTrue(is_valid_reward_unit(snap_reward(137_000)))
 
     def test_step_reward(self):
         levels = allowed_reward_levels(1_000_000)
-        self.assertEqual(step_reward(50_000, +1, 1_000_000), 100_000)
-        self.assertEqual(step_reward(100_000, -1, 1_000_000), 50_000)
+        self.assertEqual(step_reward(50_000, +1, 1_000_000), 60_000)
+        self.assertEqual(step_reward(100_000, -1, 1_000_000), 90_000)
         self.assertIn(step_reward(20_000, +1, 1_000_000), levels)
 
     def test_enforce_monotonic(self):
@@ -86,10 +94,10 @@ class TestUnitAndMonotonic(unittest.TestCase):
 
     def test_valid_structure(self):
         good = RewardStructure(((5_000_000, 20_000), (10_000_000, 50_000)), 1.5, 10_000_000, "g")
-        bad_unit = RewardStructure(((5_000_000, 20_000), (10_000_000, 60_000)), 1.5, 10_000_000, "b")
+        bad_unit = RewardStructure(((5_000_000, 20_000), (10_000_000, 65_000)), 1.5, 10_000_000, "b")
         bad_mono = RewardStructure(((5_000_000, 50_000), (10_000_000, 20_000)), 1.5, 10_000_000, "b")
         self.assertTrue(is_valid_structure(good))
-        self.assertFalse(is_valid_structure(bad_unit))
+        self.assertFalse(is_valid_structure(bad_unit))   # 5천원 단위는 불허
         self.assertFalse(is_valid_structure(bad_mono))
 
 

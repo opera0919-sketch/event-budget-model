@@ -5,14 +5,14 @@
 
 목표:
   (A) 예산 최소화 (매력도 하한 제약)
-  (B) 비용효율(ROI) 최대화 (예산 상한 제약)
+  (B) 비용효율 최대화 (예산 상한 제약)
   (C) 목표예산 달성 (현행 75% ± 허용, 매력도 최대)
 
 부산물: 예산 vs 효율 Pareto frontier.
 """
 from __future__ import annotations
 
-from dataclasses import dataclass
+from dataclasses import dataclass, field
 from typing import Dict, List, Sequence, Tuple
 
 from config import simulation_config as C
@@ -133,35 +133,81 @@ class ObjectiveResult:
     structure: RewardStructure
     metrics: AggregateMetrics
     rationale: str
+    gate_violations: List[str] = field(default_factory=list)
+
+    @property
+    def passes_gate(self) -> bool:
+        return not self.gate_violations
+
+
+def gate_violations(structure: RewardStructure, transfers) -> List[str]:
+    """선정된 구조에 최종 설계 게이트를 적용해 위반 항목을 나열한다.
+
+    탐색 단계(`_accept`)는 레거시 7단계 공간을 살리기 위해 제약을 완화하므로,
+    **선정 결과에는 반드시 최종 게이트를 다시 적용해야 한다.** 그렇지 않으면
+    리포트가 게이트 위반안을 최우선 권고로 제시하면서 동시에 '전항 PASS'라
+    표시하는 모순이 생긴다.
+    """
+    from src.quality import design_report
+    from src.reward_engine import is_strictly_increasing
+
+    out: List[str] = []
+    rewards = structure.rewards()
+    if not is_strictly_increasing(rewards):
+        out.append("평탄구간(엄격 증가 위반)")
+    q = design_report(structure, transfers)
+    if q["max_jump"] > C.MAX_TIER_JUMP + 1e-9:
+        out.append(f"경계 절벽 {q['max_jump']:.2f}x > {C.MAX_TIER_JUMP}x")
+    if q["sd"] > C.MAX_RATE_SD + 1e-9:
+        out.append(f"유효율 SD {q['sd']:.3f} > {C.MAX_RATE_SD}")
+    if q["min_ratio_vs_current"] < C.MIN_RATIO_VS_CURRENT - 1e-9:
+        out.append(f"현행 대비 {q['min_ratio_vs_current']*100:.0f}% "
+                   f"< {C.MIN_RATIO_VS_CURRENT*100:.0f}%")
+    return out
 
 
 def _feasible_attractive(m: AggregateMetrics, floor: float) -> bool:
     return m.attractiveness_index >= floor
 
 
-def select_min_budget(cand: List[Tuple[RewardStructure, AggregateMetrics]]) -> Tuple[RewardStructure, AggregateMetrics]:
-    feas = [(s, m) for s, m in cand if _feasible_attractive(m, C.OBJ_A_ATTRACT_FLOOR)]
-    feas = feas or cand  # 제약 만족 없으면 전체에서
+def _ratio_ok(structure: RewardStructure, transfers) -> bool:
+    """현행 대비 하락 하한(사용자 확정 제약)을 지키는지.
+
+    '지나친 리워드 하락 금지'는 사용자가 확정한 제약이므로 목표별 선정에서
+    **하드 feasibility**로 적용한다. 절벽·SD는 레거시 7단계 구조상 충족이
+    불가능하므로 하드 제약으로 걸지 않고 위반 사실을 병기한다.
+    """
+    from src.quality import min_ratio_vs_current
+    return min_ratio_vs_current(structure, transfers) >= C.MIN_RATIO_VS_CURRENT - 1e-9
+
+
+def select_min_budget(cand, transfers) -> Tuple[RewardStructure, AggregateMetrics]:
+    feas = [(s, m) for s, m in cand
+            if _feasible_attractive(m, C.OBJ_A_ATTRACT_FLOOR) and _ratio_ok(s, transfers)]
+    feas = feas or [(s, m) for s, m in cand if _ratio_ok(s, transfers)] or cand
     return min(feas, key=lambda sm: sm[1].budget_mean)
 
 
-def select_max_efficiency(cand, current_budget) -> Tuple[RewardStructure, AggregateMetrics]:
+def select_max_efficiency(cand, current_budget, transfers) -> Tuple[RewardStructure, AggregateMetrics]:
     cap = current_budget * C.OBJ_B_BUDGET_CAP
     feas = [(s, m) for s, m in cand
-            if m.budget_mean <= cap and _feasible_attractive(m, C.OBJ_MIN_ATTRACTIVENESS)]
-    feas = feas or [(s, m) for s, m in cand if m.budget_mean <= cap] or cand
+            if m.budget_mean <= cap and _feasible_attractive(m, C.OBJ_MIN_ATTRACTIVENESS)
+            and _ratio_ok(s, transfers)]
+    feas = feas or [(s, m) for s, m in cand
+                    if m.budget_mean <= cap and _ratio_ok(s, transfers)] or cand
     return max(feas, key=lambda sm: sm[1].efficiency)
 
 
-def select_target_budget(cand, current_budget) -> Tuple[RewardStructure, AggregateMetrics]:
+def select_target_budget(cand, current_budget, transfers) -> Tuple[RewardStructure, AggregateMetrics]:
     target = current_budget * C.OBJ_C_BUDGET_TARGET
     tol = current_budget * C.OBJ_C_BUDGET_TOL
     band = [(s, m) for s, m in cand
-            if abs(m.budget_mean - target) <= tol and _feasible_attractive(m, C.OBJ_MIN_ATTRACTIVENESS)]
+            if abs(m.budget_mean - target) <= tol
+            and _feasible_attractive(m, C.OBJ_MIN_ATTRACTIVENESS) and _ratio_ok(s, transfers)]
     if band:
         return max(band, key=lambda sm: sm[1].transfer_mean)
-    # 밴드 밖이면 목표에 가장 가까운 것.
-    return min(cand, key=lambda sm: abs(sm[1].budget_mean - target))
+    ratio_ok = [(s, m) for s, m in cand if _ratio_ok(s, transfers)] or cand
+    return min(ratio_ok, key=lambda sm: abs(sm[1].budget_mean - target))
 
 
 # ---------------------------------------------------------------------------
@@ -193,10 +239,14 @@ class OptimizationOutput:
     all_evaluated: List[Tuple[RewardStructure, AggregateMetrics]]
 
 
-def optimize(caches: Sequence[DatasetCache], top_k: int = 20, verbose: bool = False) -> OptimizationOutput:
+def optimize(caches: Sequence[DatasetCache], top_k: int = 20, verbose: bool = False,
+             transfers: Sequence[int] | None = None) -> OptimizationOutput:
     ev = Evaluator(caches)
     baseline = ev.eval(CURRENT_STRUCTURE)
     current_budget = baseline.budget_mean
+    # 현행 대비 하락률 검증용 순입금 목록. 캐시에서 복원하면 데이터 재생성이 불필요.
+    if transfers is None:
+        transfers = [v for c in caches for v, cnt in zip(c.values, c.counts) for _ in range(cnt)]
 
     # 1단계: 거친 탐색
     coarse = coarse_candidates()
@@ -229,9 +279,15 @@ def optimize(caches: Sequence[DatasetCache], top_k: int = 20, verbose: bool = Fa
     all_results = _restore(ev, coarse, seeds)
 
     obj_results = {
-        "A_min_budget": _wrap("A_min_budget", *select_min_budget(all_results), baseline, current_budget),
-        "B_max_efficiency": _wrap("B_max_efficiency", *select_max_efficiency(all_results, current_budget), baseline, current_budget),
-        "C_target_budget": _wrap("C_target_budget", *select_target_budget(all_results, current_budget), baseline, current_budget),
+        "A_min_budget": _wrap("A_min_budget",
+                              *select_min_budget(all_results, transfers),
+                              baseline, current_budget, transfers),
+        "B_max_efficiency": _wrap("B_max_efficiency",
+                                  *select_max_efficiency(all_results, current_budget, transfers),
+                                  baseline, current_budget, transfers),
+        "C_target_budget": _wrap("C_target_budget",
+                                 *select_target_budget(all_results, current_budget, transfers),
+                                 baseline, current_budget, transfers),
     }
 
     pareto = pareto_front(all_results)
@@ -249,8 +305,10 @@ def _restore(ev: Evaluator, coarse, seeds) -> List[Tuple[RewardStructure, Aggreg
     by_sig.setdefault(_signature(CURRENT_STRUCTURE), CURRENT_STRUCTURE)
     out = []
     for sig, m in ev.all_results():
-        s = by_sig.get(sig, CURRENT_STRUCTURE)
-        out.append((s, m))
+        # 무성 폴백을 두면 잘못된 구조에 남의 지표가 붙어 조용히 오답이 된다.
+        if sig not in by_sig:
+            raise KeyError(f"평가된 시그니처를 구조로 복원할 수 없음: {sig}")
+        out.append((by_sig[sig], m))
     return out
 
 
@@ -261,10 +319,11 @@ def _rationale(obj: str, m: AggregateMetrics, baseline: AggregateMetrics) -> str
                 f"(현행 {baseline.budget_mean/1e8:.2f}억→{m.budget_mean/1e8:.2f}억)")
     if obj == "B_max_efficiency":
         return (f"예산 상한 내 효율 {m.efficiency:.1f}배(현행 {baseline.efficiency:.1f}배), "
-                f"ROI {m.roi_pct:.0f}%, 예산 {save:.1f}% 절감")
+                f"예산 {save:.1f}% 절감")
     return (f"예산을 현행의 {m.budget_mean/baseline.budget_mean*100:.0f}%로 맞추며 "
             f"유치금액 {m.attractiveness_index*100:.1f}% 확보")
 
 
-def _wrap(obj, s, m, baseline, current_budget) -> ObjectiveResult:
-    return ObjectiveResult(obj, s, m, _rationale(obj, m, baseline))
+def _wrap(obj, s, m, baseline, current_budget, transfers) -> ObjectiveResult:
+    return ObjectiveResult(obj, s, m, _rationale(obj, m, baseline),
+                           gate_violations(s, transfers))

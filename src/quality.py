@@ -8,6 +8,7 @@
 """
 from __future__ import annotations
 
+from bisect import bisect_left
 from dataclasses import dataclass
 from typing import Dict, List, Sequence, Tuple
 
@@ -17,21 +18,29 @@ from src.reward_engine import RewardStructure, reward_for
 
 @dataclass
 class RateProfile:
-    """급간별 유효 리워드율 프로파일."""
-    brackets: List[Tuple[int, int]]     # (하한, 상한) — 상한 None 대신 큰 값
+    """급간별 유효 리워드율 프로파일.
+
+    rate_pct는 급간 **평균 금액에 리워드를 적용한 값이 아니라**, 급간에 속한
+    고객 각자의 유효율을 평균한 값이다. 계단함수를 평균에 적용하면
+    `reward(mean) != mean(reward)` 편향이 생기고, 자격 미달자가 섞인 급간이
+    통째로 0으로 처리돼 집계에서 빠지기 때문이다.
+    """
+    brackets: List[Tuple[int, int]]     # (하한, 상한)
     avg_transfer: List[float]           # 급간 평균 순입금
-    share: List[float]                  # 급간 인원 비중(0~1)
-    rate_pct: List[float]               # 유효 리워드율(%)
+    share: List[float]                  # 급간 인원 비중(0~1) — 자격자만
+    rate_pct: List[float]               # 급간 내 자격자의 평균 유효 리워드율(%)
+    unqualified_share: float = 0.0      # 자격 미달(리워드 0) 인원 비중
+    entry_cliff_pct: float = 0.0        # 자격 진입 시점 유효율(%) — 0 -> 이 값으로 점프
 
     def weighted_mean(self) -> float:
-        pairs = [(r, s) for r, s in zip(self.rate_pct, self.share) if r > 0]
+        pairs = [(r, s) for r, s in zip(self.rate_pct, self.share) if s > 0]
         if not pairs:
             return 0.0
         tot = sum(s for _, s in pairs)
         return sum(r * s for r, s in pairs) / tot
 
     def weighted_sd(self) -> float:
-        pairs = [(r, s) for r, s in zip(self.rate_pct, self.share) if r > 0]
+        pairs = [(r, s) for r, s in zip(self.rate_pct, self.share) if s > 0]
         if not pairs:
             return 0.0
         tot = sum(s for _, s in pairs)
@@ -39,7 +48,7 @@ class RateProfile:
         return (sum(s * (r - m) ** 2 for r, s in pairs) / tot) ** 0.5
 
     def rate_range(self) -> Tuple[float, float]:
-        vals = [r for r in self.rate_pct if r > 0]
+        vals = [r for r, s in zip(self.rate_pct, self.share) if s > 0]
         return (min(vals), max(vals)) if vals else (0.0, 0.0)
 
     def intra_regressive_steps(self) -> int:
@@ -49,7 +58,7 @@ class RateProfile:
         (같은 리워드를 더 큰 금액으로 나누므로). 따라서 이 값 자체는
         결함이 아니며, 티어 간 역진(tier_regressive_steps)과 구분해야 한다.
         """
-        vals = [r for r in self.rate_pct if r > 0]
+        vals = [r for r, s in zip(self.rate_pct, self.share) if s > 0]
         return sum(1 for i in range(len(vals) - 1) if vals[i + 1] < vals[i] - 1e-9)
 
 
@@ -67,10 +76,74 @@ def _ratio_edges() -> List[int]:
     return [i * step for i in range(1, C.RATIO_CHECK_MAX // step + 1)]
 
 
+# 급간 그룹핑 캐시.
+#   ratio_vs_current 는 후보 구조마다 호출되는데, 순입금 목록과 격자는 매번 같다.
+#   격자마다 전체 목록을 선형 스캔하면 245 x 135k = 33M 회 비교가 호출당 발생한다.
+#   정렬 + bisect 로 한 번만 그룹핑하고 결과를 캐시한다.
+_GROUP_CACHE: Dict[Tuple[int, int, int, int], List[Tuple[int, float, int]]] = {}
+
+
+_HIST_CACHE: Dict[Tuple[int, int], Tuple[List[int], List[int], List[int]]] = {}
+
+
+def _histogram(transfers: Sequence[int]) -> Tuple[List[int], List[int], List[int]]:
+    """(고유값 오름차순, 각 값의 인원수, 금액 누적합) — 캐시된다.
+
+    고객별 유효율을 구하려면 전 고객을 훑어야 하지만, 같은 금액은 같은 유효율이므로
+    고유값 단위로 계산하고 인원수로 가중하면 결과가 동일하면서 훨씬 빠르다.
+    """
+    key = (len(transfers), sum(transfers))
+    cached = _HIST_CACHE.get(key)
+    if cached is not None:
+        return cached
+
+    hist: Dict[int, int] = {}
+    for t in transfers:
+        hist[t] = hist.get(t, 0) + 1
+    values = sorted(hist)
+    counts = [hist[v] for v in values]
+    cum = [0]
+    for v, c in zip(values, counts):
+        cum.append(cum[-1] + v * c)
+    _HIST_CACHE[key] = (values, counts, cum)
+    return values, counts, cum
+
+
+def _grouped(transfers: Sequence[int], edges: Sequence[int]) -> List[Tuple[int, float, int]]:
+    """(급간 하한, 급간 평균 순입금, 인원수) 목록. 빈 급간은 제외."""
+    key = (len(transfers), sum(transfers), len(edges), hash(tuple(edges)))
+    cached = _GROUP_CACHE.get(key)
+    if cached is not None:
+        return cached
+
+    ordered = sorted(transfers)
+    prefix = [0]
+    for t in ordered:
+        prefix.append(prefix[-1] + t)
+    uppers = list(edges[1:]) + [10 ** 15]
+    out: List[Tuple[int, float, int]] = []
+    for lo, hi in zip(edges, uppers):
+        i = bisect_left(ordered, lo)
+        j = bisect_left(ordered, hi)
+        if j <= i:
+            continue
+        out.append((lo, (prefix[j] - prefix[i]) / (j - i), j - i))
+    _GROUP_CACHE[key] = out
+    return out
+
+
 def effective_rate_profile(structure: RewardStructure,
                            transfers: Sequence[int],
                            edges: Sequence[int] | None = None) -> RateProfile:
-    """급간별 평균 순입금에 대한 유효 리워드율 프로파일.
+    """급간별 유효 리워드율 프로파일 (고객별 유효율의 급간 평균).
+
+    급간 평균 금액에 리워드를 적용하지 않는다. 그렇게 하면
+    `reward(mean) != mean(reward)` 편향이 생기고, 자격 미달자가 섞인 급간
+    (0~1천만: 평균 398만 -> 리워드 0)이 통째로 집계에서 빠진다.
+
+    자격 미달자(리워드 0)는 급간 집계에서 제외하고 `unqualified_share`로
+    별도 보고한다. 자격 진입 시점의 유효율(500만원 -> 2만원 = 0.40%)은
+    `entry_cliff_pct`로 노출해 자격 절벽이 지표에서 사라지지 않게 한다.
 
     edges: 급간 하한 목록(오름차순). 생략 시 1천만원 단위 24구간.
     """
@@ -80,23 +153,44 @@ def effective_rate_profile(structure: RewardStructure,
     avg: List[float] = []
     share: List[float] = []
     rates: List[float] = []
+    n_unqualified = 0
 
+    values, counts, cum_amount = _histogram(transfers)
     uppers = list(edges[1:]) + [10 ** 15]
     for lo, hi in zip(edges, uppers):
-        group = [t for t in transfers if lo <= t < hi]
+        i = bisect_left(values, lo)
+        j = bisect_left(values, hi)
         brackets.append((lo, hi))
-        if not group:
+        if j <= i:
             avg.append(0.0)
             share.append(0.0)
             rates.append(0.0)
             continue
-        a = sum(group) / len(group)
-        r = reward_for(a, structure)
-        avg.append(a)
-        share.append(len(group) / total if total else 0.0)
-        rates.append(r / a * 100 if a else 0.0)
+        # 고객별 유효율(고유값 단위로 인원 가중). 자격 미달자는 따로 센다.
+        n_group = 0
+        amount = cum_amount[j] - cum_amount[i]
+        rate_sum = 0.0
+        n_qualified = 0
+        for k in range(i, j):
+            t = values[k]
+            c = counts[k]
+            n_group += c
+            r = reward_for(t, structure)
+            if r <= 0:
+                n_unqualified += c
+            elif t > 0:
+                rate_sum += r / t * 100 * c
+                n_qualified += c
+        avg.append(amount / n_group if n_group else 0.0)
+        share.append(n_qualified / total if total else 0.0)
+        rates.append(rate_sum / n_qualified if n_qualified else 0.0)
 
-    return RateProfile(brackets, avg, share, rates)
+    entry = reward_for(C.MIN_QUALIFY_AMOUNT, structure)
+    return RateProfile(
+        brackets, avg, share, rates,
+        unqualified_share=n_unqualified / total if total else 0.0,
+        entry_cliff_pct=entry / C.MIN_QUALIFY_AMOUNT * 100 if entry else 0.0,
+    )
 
 
 def tier_entry_rates(structure: RewardStructure) -> List[float]:
@@ -148,6 +242,8 @@ def rate_dispersion(structure: RewardStructure,
         "intra_regressive": float(p.intra_regressive_steps()),
         "tier_regressive": float(tier_regressive_steps(structure)),
         "max_tier_regression": max_tier_regression(structure),
+        "unqualified_share": p.unqualified_share,
+        "entry_cliff_pct": p.entry_cliff_pct,
     }
 
 
@@ -183,17 +279,12 @@ def ratio_vs_current(structure: RewardStructure,
 
     edges = list(edges) if edges is not None else _ratio_edges()
     total = len(transfers)
-    uppers = list(edges[1:]) + [10 ** 15]
     out: List[Tuple[int, float, float]] = []
-    for lo, hi in zip(edges, uppers):
-        group = [t for t in transfers if lo <= t < hi]
-        if not group:
-            continue
-        avg = sum(group) / len(group)
+    for lo, avg, cnt in _grouped(transfers, edges):
         cur = reward_for(avg, CURRENT_STRUCTURE)
         if cur <= 0:
             continue
-        out.append((lo, reward_for(avg, structure) / cur, len(group) / total if total else 0.0))
+        out.append((lo, reward_for(avg, structure) / cur, cnt / total if total else 0.0))
     return out
 
 

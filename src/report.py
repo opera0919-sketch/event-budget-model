@@ -117,7 +117,7 @@ def build_markdown(out, caches, case_metrics: List[AggregateMetrics]) -> str:
     L.append("## 4. 목표별 추천 구조 (2단계 탐색 결과)\n")
     titles = {
         "A_min_budget": "A. 예산 최소화 (매력도 유지)",
-        "B_max_efficiency": "B. 비용효율(ROI) 최대화",
+        "B_max_efficiency": "B. 비용효율 최대화",
         "C_target_budget": "C. 목표예산 달성 (현행 ≈75%)",
     }
     for key in ["A_min_budget", "B_max_efficiency", "C_target_budget"]:
@@ -128,7 +128,7 @@ def build_markdown(out, caches, case_metrics: List[AggregateMetrics]) -> str:
         L.append(f"- 예산 **{won(m.budget_mean)}** (현행 대비 {m.budget_mean/b.budget_mean*100:.0f}%, "
                  f"worst {won(m.budget_worst)} / best {won(m.budget_best)})")
         L.append(f"- 유치 이전금액 {won(m.transfer_mean)} (매력도 {pct(m.attractiveness_index)}) | "
-                 f"효율 {m.efficiency:.0f}배 | ROI {m.roi_pct:.0f}% | CPA {won(m.cpa)} | 평균이전 {won(m.avg_transfer)}")
+                 f"효율 {m.efficiency:.0f}배 | CPA {won(m.cpa)} | 평균이전 {won(m.avg_transfer)}")
         L.append(f"- **근거**: {res.rationale}\n")
 
     # 5. Pareto
@@ -155,31 +155,111 @@ def build_markdown(out, caches, case_metrics: List[AggregateMetrics]) -> str:
     # 6-1. 추천 3안 (직접구간)
     L.append(_recommended_section(caches))
 
-    # 7. 권고
-    L.append("## 8. 실무 권고\n")
-    a = out.objectives["A_min_budget"]
-    L.append("의사결정은 **두 갈래**로 정리된다. 두 축은 서로 다른 것을 최적화하므로 "
-             "한쪽이 다른 쪽을 지배하지 않는다.\n")
-    L.append(f"1. **경제성 우선 — A안(배수 1.5 유지, 7단계)**: 매력도 "
-             f"{pct(a.metrics.attractiveness_index)}에 예산 {won(b.budget_mean)}→"
-             f"{won(a.metrics.budget_mean)}({(1-a.metrics.budget_mean/b.budget_mean)*100:.0f}% 절감). "
-             "다만 유효 리워드율이 0.14~0.44%로 흩어지고 티어 간 역진이 남는다.")
-    L.append("2. **설계 품질 우선 — 직접구간 안1~안3(배수 폐지, 9단계)**: 유효율 SD가 "
-             "0.070→0.030~0.053으로 안정되고 경계 절벽이 2.50x→2.00x로 완화된다. "
-             "고객 입장에서 '내 금액이 곧 내 구간'이라 이해도도 높다.")
-    L.append("")
-    L.append("- **예산 절감폭이 최우선이면** A안 또는 안3(예산 70%).")
-    L.append("- **형평성·설명가능성까지 고려하면** 안2(예산 75%, 매력도 90.0%)가 균형점이며, "
-             "매력도 방어가 중요하면 안1(예산 93%, 매력도 94.0%).")
-    L.append("- **배수 조건**: 배수는 최대 비용 레버인 동시에, 그 참여 유인 효과(+3%)가 "
-             "미검증 가정이다(§7 경고 참조). 배수 유지·폐지 결정 전 실측 검증을 권고한다.\n")
+    # 8. 권고 — 모든 수치는 계산값에서 포맷팅한다(리터럴 금지).
+    L.append(_recommendation_section(out, caches))
 
-    L.append(_gate_section(caches))
+    L.append(_gate_section(out, caches))
 
     L.append("## 부록. 실행 방법\n")
     L.append("```\npython scripts/run_generate_data.py\npython scripts/run_simulation.py\n"
              "python scripts/run_optimize.py\npython scripts/build_excel.py\n"
              "python -m pytest tests/ -q\n```\n")
+    return "\n".join(L)
+
+
+def _recommendation_section(out, caches) -> str:
+    """실무 권고 — 모든 수치를 계산값에서 포맷팅한다.
+
+    이전에는 이 절에 수치를 리터럴로 적어 두어, 모델이 바뀌어도 서술이 따라오지
+    않고 같은 리포트의 계산 표와 모순됐다. 리터럴을 두지 않는 것이 원칙이다.
+    """
+    from src.cases import all_candidate_plans
+    from src.data_generator import generate_all
+    from src.quality import design_report
+    from src.reward_engine import CURRENT_STRUCTURE
+
+    transfers = [t for d in generate_all() for t in d.transfers]
+    b = out.baseline
+    q0 = design_report(CURRENT_STRUCTURE, transfers)
+    plans = all_candidate_plans()
+    rows = []
+    for p in plans:
+        m = evaluate_structure(caches, p)
+        q = design_report(p, transfers)
+        rows.append((p, m, q))
+
+    L = ["## 8. 실무 권고\n"]
+
+    # 게이트를 통과한 후보만 권고 대상.
+    L.append("### 8-1. 게이트 통과 후보 (권고 대상)\n")
+    L.append("| 안 | 예산 | 현행比 | 매력도 | 효율 | 현행대비 최저 | 유효율 SD | 절벽 |")
+    L.append("|---|---|---|---|---|---|---|---|")
+    L.append(f"| (현행) | {won(b.budget_mean)} | 100% | 100.0% | {b.efficiency:.0f}배 | — | "
+             f"{q0['sd']:.3f} | {q0['max_jump']:.2f}x |")
+    for p, m, q in rows:
+        L.append(f"| {p.name} | {won(m.budget_mean)} | {m.budget_mean/b.budget_mean*100:.0f}% | "
+                 f"{pct(m.attractiveness_index)} | {m.efficiency:.0f}배 | "
+                 f"{q['min_ratio_vs_current']*100:.0f}% | {q['sd']:.3f} | {q['max_jump']:.2f}x |")
+    L.append("")
+
+    # 예산 최소 / 매력도 최대 후보를 계산으로 뽑는다.
+    cheapest = min(rows, key=lambda r: r[1].budget_mean)
+    most_attractive = max(rows, key=lambda r: r[1].attractiveness_index)
+    best_sd = min(rows, key=lambda r: r[2]["sd"])
+    L.append(f"- **예산 절감이 최우선이면 {cheapest[0].name}** — "
+             f"{won(cheapest[1].budget_mean)}({cheapest[1].budget_mean/b.budget_mean*100:.0f}%, "
+             f"{(1-cheapest[1].budget_mean/b.budget_mean)*100:.0f}% 절감), "
+             f"매력도 {pct(cheapest[1].attractiveness_index)}, "
+             f"현행 대비 최저 {cheapest[2]['min_ratio_vs_current']*100:.0f}%.")
+    L.append(f"- **매력도 방어가 최우선이면 {most_attractive[0].name}** — "
+             f"매력도 {pct(most_attractive[1].attractiveness_index)}, "
+             f"예산 {won(most_attractive[1].budget_mean)}"
+             f"({most_attractive[1].budget_mean/b.budget_mean*100:.0f}%).")
+    L.append(f"- **유효율 일관성이 최우선이면 {best_sd[0].name}** — SD {best_sd[2]['sd']:.3f} "
+             f"(현행 {q0['sd']:.3f}).")
+    L.append("")
+
+    # 배수 유지 vs 폐지 — 계산값으로 비교.
+    keep = [r for r in rows if r[0].multiplier > 1.0]
+    drop = [r for r in rows if r[0].multiplier <= 1.0]
+    if keep and drop:
+        k = keep[0]
+        # 같은 하한 수준의 직접구간안과 비교.
+        comparable = min(drop, key=lambda r: abs(
+            r[2]["min_ratio_vs_current"] - k[2]["min_ratio_vs_current"]))
+        L.append("### 8-2. 배수 유지 vs 폐지\n")
+        L.append(f"같은 현행 대비 하한({k[2]['min_ratio_vs_current']*100:.0f}% 대) 기준 비교:\n")
+        L.append(f"- **{k[0].name}(배수 유지)**: 예산 {won(k[1].budget_mean)}"
+                 f"({k[1].budget_mean/b.budget_mean*100:.0f}%), 매력도 {pct(k[1].attractiveness_index)}, "
+                 f"SD {k[2]['sd']:.3f}, 절벽 {k[2]['max_jump']:.2f}x")
+        L.append(f"- **{comparable[0].name}(배수 폐지)**: 예산 {won(comparable[1].budget_mean)}"
+                 f"({comparable[1].budget_mean/b.budget_mean*100:.0f}%), "
+                 f"매력도 {pct(comparable[1].attractiveness_index)}, "
+                 f"SD {comparable[2]['sd']:.3f}, 절벽 {comparable[2]['max_jump']:.2f}x")
+        better = ("배수 유지안" if (k[1].budget_mean <= comparable[1].budget_mean
+                                and k[1].attractiveness_index >= comparable[1].attractiveness_index)
+                  else "우열 혼재")
+        if better == "배수 유지안":
+            L.append("")
+            L.append("→ 계량 지표(예산·매력도·유효율 분산)에서는 **배수 유지안이 우세**하다. "
+                     "직접구간안의 남는 장점은 계량되지 않는 **고객 이해도**"
+                     "(경계가 실제 순입금과 일치)와 배수 로직 제거에 따른 운영 단순화다.")
+        L.append("")
+        L.append("- **단, 배수 유지안의 우위 일부는 배수 참여보너스(+3%) 가정에서 나온다.** "
+                 "이는 미검증 가정이므로(§7 경고) 배수 존폐 결정 전 실측 검증을 권고한다.")
+        L.append("")
+
+    # A/B/C 최적화 결과는 게이트 위반 시 격하.
+    L.append("### 8-3. 목표별 최적화 결과(A/B/C)의 위치\n")
+    violated = [(k, r) for k, r in out.objectives.items() if not r.passes_gate]
+    if violated:
+        L.append("A/B/C는 예산·효율만으로 탐색한 **참고치**이며, 설계 게이트를 통과하지 못한다. "
+                 "권고안으로 쓰지 않는다.\n")
+        for key, res in violated:
+            L.append(f"- **{key}**: {', '.join(res.gate_violations)}")
+    else:
+        L.append("A/B/C 모두 설계 게이트를 통과한다.")
+    L.append("")
     return "\n".join(L)
 
 
@@ -221,35 +301,38 @@ def _ratio_vs_current_table(plans, transfers) -> str:
     L.append(f"- **최저 보장 수준**(100만원 격자): "
              + ", ".join(f"{n} {r*100:.0f}%" for n, r in floors)
              + f" — 게이트 하한 {C.MIN_RATIO_VS_CURRENT*100:.0f}%.")
-    L.append("- 67%가 나오는 곳은 세 안 공통으로 **3,000만~5,000만 구간**(인원 21.9%), "
-             "안3은 추가로 **7,000만~9,000만 구간**(인원 10.8%)이다. 원인은 리워드 단위 "
-             "제약이 10만원과 15만원 사이(그리고 20만원과 30만원 사이) 값을 허용하지 않아 "
-             "중간 수준을 만들 수 없다는 것이다. "
-             "(3~5천만 구간에 12만원이 허용되면 80% 방어 가능, 예산 +4%p)")
-    L.append("- **최상위 2개 티어(1.3억·1.7억 이상)는 현행 수준(60만·100만)으로 방어**했다. "
-             "방어하지 않으면 최고액 고객이 현행의 45~65%까지 떨어진다.")
+    # 하락 구간을 계산으로 뽑아 서술한다(리터럴 금지).
+    fine = ratio_vs_current(plans[0], transfers)
+    for p, rd in zip(plans, ratios):
+        lows = [(lo, r, sh) for lo, r, sh in ratio_vs_current(p, transfers) if r < 0.90]
+        if not lows:
+            continue
+        pop = sum(sh for _, _, sh in lows)
+        lo_min = min(lows, key=lambda x: x[1])
+        L.append(f"- **{p.name}**: 현행의 90% 미만 구간 인원 {pop*100:.1f}%, "
+                 f"최저 {lo_min[1]*100:.0f}% @{won(lo_min[0])}~")
     L.append("- **6,600만원 경계**는 현행의 실효 경계(인정 1억 = 실제 6,667만)에 맞춘 것이다. "
              "7,000만원에 두면 6,667만~7,000만 고객이 30만→15만으로 **현행의 50%**가 된다.")
-    L.append("- **A안'(배수 유지)**는 같은 예산대에서 매력도·하락방어가 더 좋으나(96.2%/75%), "
-             "유효율 분산 0.077·절벽 3.00x로 설계품질은 현행 수준에 머문다. "
-             "**경제성 vs 설계품질**의 선택이다.\n")
+    L.append(f"- 리워드 단위는 **{won(C.REWARD_UNIT)}원**이다. 당초 '5만원 초과는 5만원 단위'로 "
+             "가정했으나 현행 구조에 6만원 티어가 실재해 그 가정이 틀렸다. 단위를 바로잡으면 "
+             "12만·13만 같은 중간값을 쓸 수 있어 하락 방어가 쉬워진다.\n")
     return "\n".join(L)
 
 
-def _gate_section(caches) -> str:
+def _gate_section(out, caches) -> str:
     """완성도 게이트 체크리스트 — 사양 준수와 설계 제약을 실측으로 재확인."""
-    from src.cases import recommended_plans
+    from src.cases import all_candidate_plans
     from src.data_generator import generate_all
     from src.quality import design_report
     from src.reward_engine import (CURRENT_STRUCTURE, budget_amount,
-                                   is_valid_structure)
+                                   is_valid_structure, reward_for)
     from src import demand_model as dm
 
     datasets = generate_all()
     transfers = [t for d in datasets for t in d.transfers]
     counts = [d.n_customers for d in datasets]
     base = evaluate_structure(caches, CURRENT_STRUCTURE)
-    plans = recommended_plans()
+    plans = all_candidate_plans()
 
     checks: List[tuple] = []
     # G1 데이터
@@ -261,29 +344,36 @@ def _gate_section(caches) -> str:
                    f"{min(counts):,}~{max(counts):,}"))
     checks.append(("G1.3", f"{C.N_ROUNDS}회 반복", len(datasets) == C.N_ROUNDS, f"{len(datasets)}회"))
     # G2 제세
-    checks.append(("G2.1", "제세 그로스업 공식",
-                   abs(budget_amount(60_000) - ((60_000 / 0.78) * 0.22 + 60_000)) < 1e-6,
-                   f"6만→{budget_amount(60_000):,.0f}원"))
+    # 독립 기대값(리터럴)과 비교한다. 구현식을 그대로 다시 쓰면 실패할 수 없는
+    # 항진명제가 되어 PASS 개수만 부풀린다.
+    checks.append(("G2.1", "제세 그로스업 공식", round(budget_amount(60_000)) == 76_923,
+                   f"6만→{budget_amount(60_000):,.0f}원 (기대 76,923원)"))
     checks.append(("G2.2", "5만 미만 미적용", budget_amount(40_000) == 40_000, "4만→40,000원"))
-    # G3 탄력성
-    checks.append(("G3.1", "현행 r=1 정규화", abs(dm.participation_scaling(1.0) - 1.0) < 1e-9, "1.000000"))
-    checks.append(("G3.2", "sticky(r=0.9)", dm.participation_scaling(0.9) > 0.95,
-                   f"{dm.participation_scaling(0.9):.3f}"))
-    checks.append(("G3.3", "대폭하향 급감(r=0.3)", dm.participation_scaling(0.3) < 0.75,
-                   f"{dm.participation_scaling(0.3):.3f}"))
-    # G4 결론 정합
+    checks.append(("G2.3", "5만 경계 그로스업 적용", round(budget_amount(50_000)) == 64_103,
+                   f"5만→{budget_amount(50_000):,.0f}원 (기대 64,103원)"))
+    # G3 탄력성 — 독립 기대값과 비교
+    checks.append(("G3.1", "sticky(r=0.9 소폭하향)", dm.participation_scaling(0.9) > 0.95,
+                   f"{dm.participation_scaling(0.9):.3f} > 0.95"))
+    checks.append(("G3.2", "대폭하향 급감(r=0.3)", dm.participation_scaling(0.3) < 0.75,
+                   f"{dm.participation_scaling(0.3):.3f} < 0.75"))
+    checks.append(("G3.3", "비선형(구간별 기울기 상이)",
+                   abs((dm.participation_scaling(0.9) - dm.participation_scaling(0.7))
+                       - (dm.participation_scaling(0.5) - dm.participation_scaling(0.3))) > 0.02,
+                   "sticky 구간과 급락 구간의 기울기 차 > 0.02"))
+    # G4 결론 정합 — 파이프라인 밖에서 독립 계산한 값과 비교
     checks.append(("G4.1", "baseline 매력도=100%", abs(base.attractiveness_index - 1.0) < 1e-6, "100.0%"))
-    checks.append(("G4.2", "KPI 정의 정합",
-                   abs(base.efficiency - base.transfer_mean / base.budget_mean) < 1e-6,
-                   f"효율 {base.efficiency:.0f}배"))
+    indep_budget = sum(budget_amount(reward_for(t, CURRENT_STRUCTURE)) for t in transfers) / C.N_ROUNDS
+    checks.append(("G4.2", "예산=Σ그로스업(독립 계산 대조)",
+                   abs(base.budget_mean - indep_budget) / indep_budget < 1e-6,
+                   f"{won(base.budget_mean)} vs 독립계산 {won(indep_budget)}"))
     q0 = design_report(CURRENT_STRUCTURE, transfers)
     checks.append(("G4.3", "사문화 티어 없음(현행)", q0["dead_tiers"] == 0,
                    "배수로 인정 3.59억까지 도달 → 3억 티어 생존"))
     # G5 설계 제약 (추천 3안)
     all_unit = all(is_valid_structure(p) for p in plans)
-    checks.append(("G5.1", "추천안 리워드 단위 준수", all_unit, "3안 전부 통과"))
+    checks.append(("G5.1", "후보안 리워드 단위 준수", all_unit, f"{len(plans)}안 전부 통과"))
     all_strict = all(is_valid_structure(p, strict_increase=True) for p in plans)
-    checks.append(("G5.2", "추천안 평탄구간 없음", all_strict, "3안 전부 엄격 증가"))
+    checks.append(("G5.2", "후보안 평탄구간 없음", all_strict, f"{len(plans)}안 전부 엄격 증가"))
     all_jump = all(is_valid_structure(p, max_jump=C.MAX_TIER_JUMP) for p in plans)
     jm = max(design_report(p, transfers)["max_jump"] for p in plans)
     checks.append(("G5.3", f"경계 절벽 ≤{C.MAX_TIER_JUMP}x", all_jump, f"최대 {jm:.2f}x (현행 {q0['max_jump']:.2f}x)"))
@@ -291,21 +381,30 @@ def _gate_section(caches) -> str:
     checks.append(("G5.4", f"유효율 SD ≤{C.MAX_RATE_SD}", max(sds) <= C.MAX_RATE_SD + 1e-9,
                    f"최대 {max(sds):.3f} (현행 {q0['sd']:.3f})"))
     ratios = [design_report(p, transfers)["min_ratio_vs_current"] for p in plans]
+    worst_name = min(zip(plans, ratios), key=lambda x: x[1])
     checks.append(("G5.5", f"현행 대비 리워드 ≥{C.MIN_RATIO_VS_CURRENT*100:.0f}%",
                    min(ratios) >= C.MIN_RATIO_VS_CURRENT - 1e-9,
-                   f"최저 {min(ratios)*100:.0f}% (3~5천만 구간, 단위 제약 기인)"))
+                   f"최저 {min(ratios)*100:.0f}% ({worst_name[0].name})"))
 
-    passed = sum(1 for *_, ok, _ in [(c[0], c[1], c[2], c[3]) for c in checks] if ok)
+    # G6 — A/B/C 최적화 결과도 검사 대상에 넣는다. 이전에는 추천 3안만 검사해
+    #      게이트 위반안이 '전항 PASS' 표시 아래 최우선 권고로 실렸다.
+    for key in ["A_min_budget", "B_max_efficiency", "C_target_budget"]:
+        res = out.objectives.get(key)
+        if res is None:
+            continue
+        checks.append((f"G6.{key[0]}", f"{key} 게이트 통과", res.passes_gate,
+                       "통과" if res.passes_gate else " / ".join(res.gate_violations)))
+
+    passed = sum(1 for c in checks if c[2])
     L = ["## 9. 완성도 게이트 체크리스트\n",
          f"**{passed}/{len(checks)} PASS** — 데이터·제세·탄력성 사양과 설계 제약을 실측으로 재확인.\n",
          "| ID | 항목 | 결과 | 실측 |", "|---|---|---|---|"]
     for cid, name, ok, detail in checks:
         L.append(f"| {cid} | {name} | {'PASS' if ok else '**FAIL**'} | {detail} |")
     L.append("")
-    L.append("> 주: 초기 검토에서 '3억 티어 사문화'로 판정했으나, 배수(1.5배) 적용 시 "
-             "인정금액이 최대 3.59억에 도달하므로 **해당 티어는 생존**한다(0.21%). "
-             "배수를 폐지하면 상위 티어 도달자가 사라지므로, 추천 3안은 최상단 경계를 "
-             "1.7억으로 낮춰 사문화를 방지했다.\n")
+    L.append("> 주: G6은 예산·효율만으로 탐색한 A/B/C 결과에 최종 설계 게이트를 적용한 것이다. "
+             "탐색 단계는 레거시 7단계 공간을 살리려 제약을 완화하므로, 선정 결과에는 "
+             "게이트를 다시 적용해야 한다(§8-3 참조).\n")
     return "\n".join(L)
 
 
@@ -386,7 +485,6 @@ def _recommended_section(caches) -> str:
         ("현행 대비", "100%", [f"{m.budget_mean/base.budget_mean*100:.0f}%" for m in ms]),
         ("매력도", "100.0%", [pct(m.attractiveness_index) for m in ms]),
         ("효율(배)", f"{base.efficiency:.0f}", [f"{m.efficiency:.0f}" for m in ms]),
-        ("ROI(%)", f"{base.roi_pct:.0f}", [f"{m.roi_pct:.0f}" for m in ms]),
         ("CPA", won(base.cpa), [won(m.cpa) for m in ms]),
         ("worst 예산", won(base.budget_worst), [won(m.budget_worst) for m in ms]),
         ("유효율 SD", f"{q0['sd']:.3f}", [f"{q['sd']:.3f}" for q in qs]),
@@ -422,14 +520,14 @@ def _recommended_section(caches) -> str:
 
 
 def _metrics_table(metrics: List[AggregateMetrics], baseline: AggregateMetrics) -> str:
-    head = "| 케이스 | 예산 | 현행比 | 유치금액 | 매력도 | 효율(배) | ROI% | CPA | worst예산 |"
-    sep = "|---|---|---|---|---|---|---|---|---|"
+    head = "| 케이스 | 예산 | 현행比 | 유치금액 | 매력도 | 효율(배) | CPA | worst예산 |"
+    sep = "|---|---|---|---|---|---|---|---|"
     lines = [head, sep]
     for m in metrics:
         lines.append(
             f"| {m.name} | {won(m.budget_mean)} | {m.budget_mean/baseline.budget_mean*100:.0f}% | "
             f"{won(m.transfer_mean)} | {pct(m.attractiveness_index)} | {m.efficiency:.0f} | "
-            f"{m.roi_pct:.0f} | {won(m.cpa)} | {won(m.budget_worst)} |")
+            f"{won(m.cpa)} | {won(m.budget_worst)} |")
     return "\n".join(lines)
 
 

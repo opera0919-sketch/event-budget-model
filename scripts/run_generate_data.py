@@ -9,7 +9,8 @@ sys.path.insert(0, os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
 from config import simulation_config as C  # noqa: E402
 from src.data_generator import generate_all, save_all  # noqa: E402
 
-DATA_DIR = os.path.join(os.path.dirname(os.path.dirname(os.path.abspath(__file__))), "data")
+# PR #1의 실적 데이터(data/history.csv 등)와 섞이지 않도록 하위 폴더로 분리한다.
+DATA_DIR = os.path.join(os.path.dirname(os.path.dirname(os.path.abspath(__file__))), "data", "simulation")
 
 
 def main() -> None:

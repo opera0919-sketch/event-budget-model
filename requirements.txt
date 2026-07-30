@@ -1,5 +1,9 @@
-# 코어(데이터 생성·시뮬레이션·최적화·테스트)는 표준 라이브러리만으로 동작합니다.
-# 아래는 선택적 산출물(엑셀 워크북 / Pareto PNG 차트)에만 필요합니다.
-openpyxl>=3.1    # scripts/build_excel.py
+# 이 저장소에는 두 모델이 공존한다.
+#   (1) 신청자·예산 예측 모델 : src/event_budget/  -> PyYAML 필요
+#   (2) 리워드 구조 최적화 모델 : src/            -> 코어는 표준 라이브러리만
+PyYAML>=6.0      # (1) 이벤트 명세(events/*.yaml)·파라미터 로딩
+
+# 아래는 (2)의 선택적 산출물에만 필요하다.
+openpyxl>=3.1    # scripts/build_excel.py (엑셀 워크북)
 matplotlib>=3.5  # scripts/run_optimize.py (pareto.png). 미설치 시 엑셀 차트로 대체
 pytest>=7.0      # 테스트 실행(선택). python -m unittest 로도 실행 가능

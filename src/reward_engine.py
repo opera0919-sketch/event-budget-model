@@ -85,34 +85,30 @@ def budget_for(transfer: float, structure: RewardStructure) -> float:
 
 # --- 최적화용 리워드 단위/단조 제약 헬퍼 ----------------------------------
 def is_valid_reward_unit(reward: int) -> bool:
-    """리워드 단위 제약: <=5만원은 1만원 단위, >=5만원은 5만원 단위."""
+    """리워드 단위 제약: 전 구간 1만원 단위.
+
+    당초에는 '5만원 초과는 5만원 단위'로 두었으나, 현행 구조에 6만원 티어가
+    실재하므로 그 제약은 실제 운영 규칙이 아니었다(현행 자체가 위반).
+    규칙을 1만원 단위로 바로잡으면 10만~15만 사이 값(예: 12만원)을 쓸 수 있어
+    현행 대비 하락 방어가 크게 쉬워진다.
+    """
     if reward == 0:
         return True
     if reward < 0:
         return False
-    if reward <= C.TAX_THRESHOLD:  # <= 50,000
-        return reward % 10_000 == 0
-    return reward % 50_000 == 0
+    return reward % C.REWARD_UNIT == 0
 
 
 def allowed_reward_levels(max_reward: int) -> List[int]:
     """제약을 만족하는 허용 리워드 수준 목록(오름차순)."""
-    levels = [v for v in range(10_000, C.TAX_THRESHOLD + 1, 10_000)]  # 1~5만
-    v = C.TAX_THRESHOLD + 50_000  # 10만부터 5만 단위
-    while v <= max_reward:
-        levels.append(v)
-        v += 50_000
-    return levels
+    return list(range(C.REWARD_UNIT, max_reward + 1, C.REWARD_UNIT))
 
 
 def snap_reward(x: float) -> int:
-    """임의 금액을 허용 단위(≤5만원 1만 단위 / >5만원 5만 단위)로 스냅."""
+    """임의 금액을 허용 단위(1만원)로 스냅."""
     if x <= 0:
         return 0
-    if x <= C.TAX_THRESHOLD:
-        v = round(x / 10_000) * 10_000
-        return int(max(10_000, min(v, C.TAX_THRESHOLD)))
-    return int(round(x / 50_000) * 50_000)
+    return int(max(C.REWARD_UNIT, round(x / C.REWARD_UNIT) * C.REWARD_UNIT))
 
 
 def step_reward(reward: int, direction: int, max_reward: int) -> int:

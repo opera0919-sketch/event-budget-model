@@ -32,14 +32,16 @@ def main() -> None:
     write_metrics_csv(case_metrics, os.path.join(RESULTS_DIR, "case_metrics.csv"))
     write_pareto_csv(out.pareto, os.path.join(RESULTS_DIR, "pareto.csv"))
 
-    # 목표별 최적안 지표 CSV
-    obj_metrics = [out.baseline] + [out.objectives[k].metrics for k in
-                                    ["A_min_budget", "B_max_efficiency", "C_target_budget"]]
-    for name, key in zip(["현행", "A_예산최소", "B_효율최대", "C_목표예산"],
-                         [None, "A_min_budget", "B_max_efficiency", "C_target_budget"]):
-        if key:
-            out.objectives[key].metrics.name = name
-    out.baseline.name = "현행"
+    # 목표별 최적안 지표 CSV.
+    #   AggregateMetrics 는 Evaluator 캐시에서 공유되므로 .name 을 사후에 바꾸면
+    #   캐시가 오염된다. 표시용 이름은 복사본에만 설정한다.
+    import dataclasses
+
+    labels = {"A_min_budget": "A_예산최소", "B_max_efficiency": "B_효율최대",
+              "C_target_budget": "C_목표예산"}
+    obj_metrics = [dataclasses.replace(out.baseline, name="현행")]
+    for key, label in labels.items():
+        obj_metrics.append(dataclasses.replace(out.objectives[key].metrics, name=label))
     write_metrics_csv(obj_metrics, os.path.join(RESULTS_DIR, "objective_optima.csv"))
 
     png = render_pareto_png(out.all_evaluated, out.pareto, out.objectives, out.baseline,

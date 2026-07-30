@@ -132,13 +132,26 @@ class TestRecommendedPlans(unittest.TestCase):
             sd = design_report(p, self.transfers)["sd"]
             self.assertLessEqual(sd, C.MAX_RATE_SD + 1e-9, f"{p.name} 유효율 SD {sd:.4f} 초과")
 
-    def test_better_than_current_on_quality(self):
-        """3안 모두 현행보다 유효율 일관성과 절벽이 개선되어야 한다."""
+    def test_cliff_improves_vs_current(self):
+        """3안 모두 현행보다 경계 절벽이 완화되어야 한다."""
         q0 = design_report(CURRENT_STRUCTURE, self.transfers)
         for p in self.plans:
             q = design_report(p, self.transfers)
-            self.assertLess(q["sd"], q0["sd"], f"{p.name} 유효율 SD 미개선")
             self.assertLess(q["max_jump"], q0["max_jump"], f"{p.name} 절벽 미개선")
+
+    def test_sd_not_materially_worse_than_current(self):
+        """유효율 SD는 현행과 동등 수준이어야 한다(개선은 보장되지 않음).
+
+        고객별 가중으로 편향을 제거한 뒤에는 현행 SD가 0.044로 낮아져,
+        상위 티어를 방어하는 신규안이 현행보다 SD가 낮다고 단정할 수 없다.
+        상한(MAX_RATE_SD)만 지키고, 현행 대비 크게 나빠지지 않는지만 본다.
+        """
+        q0 = design_report(CURRENT_STRUCTURE, self.transfers)
+        for p in self.plans:
+            q = design_report(p, self.transfers)
+            self.assertLessEqual(q["sd"], C.MAX_RATE_SD + 1e-9, f"{p.name} SD 상한 초과")
+            self.assertLess(q["sd"], q0["sd"] * 1.15,
+                            f"{p.name} SD {q['sd']:.3f}가 현행 {q0['sd']:.3f} 대비 과도 악화")
 
     def test_no_excessive_reward_drop(self):
         """매력도 방어: 어떤 급간도 현행 대비 하한 미만으로 떨어지지 않아야 한다."""
@@ -149,11 +162,22 @@ class TestRecommendedPlans(unittest.TestCase):
                 f"{p.name} 현행 대비 {worst*100:.0f}%로 과도 하락")
 
     def test_top_tiers_protected(self):
-        """최상위 2개 티어는 현행 수준(60만/100만)을 방어해야 한다."""
+        """최상위 티어도 현행 대비 하한을 지켜야 한다(최고액 고객 이탈 방지).
+
+        절대 금액이 아니라 '현행 대비 비율'로 검증한다. 목표 보장률이 바뀌면
+        절대 금액은 따라 바뀌지만 비율 하한은 유지돼야 한다.
+        """
+        from src.reward_engine import reward_for
+
         for p in self.plans:
-            rewards = p.rewards()
-            self.assertGreaterEqual(rewards[-1], 1_000_000, f"{p.name} 최상단 티어 미방어")
-            self.assertGreaterEqual(rewards[-2], 550_000, f"{p.name} 차상단 티어 미방어")
+            for amount in (150_000_000, 200_000_000, 230_000_000):
+                cur = reward_for(amount, CURRENT_STRUCTURE)
+                if cur <= 0:
+                    continue
+                ratio = reward_for(amount, p) / cur
+                self.assertGreaterEqual(
+                    ratio, C.MIN_RATIO_VS_CURRENT - 1e-9,
+                    f"{p.name} {amount/1e8:.1f}억 고객 현행의 {ratio*100:.0f}%")
 
     def test_no_dead_tiers(self):
         for p in self.plans:

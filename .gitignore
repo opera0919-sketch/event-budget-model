@@ -2,3 +2,8 @@ __pycache__/
 *.pyc
 .pytest_cache/
 .DS_Store
+
+# 리워드 시뮬레이션의 합성 회차 데이터는 커밋하지 않는다.
+#   scripts/run_generate_data.py 가 시드 고정으로 비트 동일하게 재생성한다.
+#   (PR #1의 실적 데이터 data/history.csv, data/market.csv 는 추적 유지)
+data/simulation/

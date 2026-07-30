@@ -138,7 +138,7 @@ def evaluate_round(cache: DatasetCache, structure: RewardStructure,
 
 @dataclass
 class AggregateMetrics:
-    """30회차 집계 + 파생 KPI (예산·효율·ROI·CPA는 제세 포함 예산 기준)."""
+    """30회차 집계 + 파생 KPI (예산·효율·CPA는 제세 포함 예산 기준)."""
     name: str
     # 예산
     budget_mean: float
@@ -155,7 +155,9 @@ class AggregateMetrics:
     # KPI
     cost_rate_pct: float          # 예산/이전금액 * 100
     efficiency: float             # 이전금액/예산 (배)
-    roi_pct: float                # (이전금액-예산)/예산 * 100
+    # 주: 'ROI'라는 이름은 쓰지 않는다. 유치 이전금액은 수익이 아니라 자산 유입액이므로
+    #     (유치-예산)/예산 을 수익률로 부르면 24,938% 같은 오해를 부르는 값이 된다.
+    #     의미가 정확한 '효율(= 유치금액/예산, 배)'만 남긴다.
     cpa: float                    # 예산/수령자
     avg_transfer: float           # 이전금액/신청자
     avg_reward_recipient: float   # 리워드/수령자
@@ -176,7 +178,6 @@ class AggregateMetrics:
             "수령자수_평균": round(self.recipients_mean),
             "비용률_%": round(self.cost_rate_pct, 4),
             "효율_배": round(self.efficiency, 2),
-            "ROI_%": round(self.roi_pct, 1),
             "CPA": round(self.cpa),
             "평균이전금액": round(self.avg_transfer),
             "수령자당평균리워드": round(self.avg_reward_recipient),
@@ -203,7 +204,6 @@ def aggregate(rounds: Sequence[RoundMetrics], name: str) -> AggregateMetrics:
 
     cost_rate = budget_mean / transfer_mean * 100 if transfer_mean else 0.0
     efficiency = transfer_mean / budget_mean if budget_mean else 0.0
-    roi = (transfer_mean - budget_mean) / budget_mean * 100 if budget_mean else 0.0
     cpa = budget_mean / recipients_mean if recipients_mean else 0.0
     avg_transfer = transfer_mean / applicants_mean if applicants_mean else 0.0
     avg_reward_rec = reward_mean / recipients_mean if recipients_mean else 0.0
@@ -222,7 +222,6 @@ def aggregate(rounds: Sequence[RoundMetrics], name: str) -> AggregateMetrics:
         recipients_mean=recipients_mean,
         cost_rate_pct=cost_rate,
         efficiency=efficiency,
-        roi_pct=roi,
         cpa=cpa,
         avg_transfer=avg_transfer,
         avg_reward_recipient=avg_reward_rec,
