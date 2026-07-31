@@ -104,52 +104,76 @@ def cmd_stress(args):
     forecasts = _forecasts(spec, history, benchmarks, market)
 
     p = _stress_product(spec)
-    model = tiers.load_tier_model(p.reward_tier_key, p.reward_tiers_path)
+    model = tiers.load_empirical_tier_model(p.reward_tier_key, p.reward_tiers_path)
+    events = tiers.event_tier_models(p.reward_tier_key, p.reward_tiers_path)
+    legacy = tiers.load_tier_model(p.reward_tier_key, p.reward_tiers_path)
 
     cfg = spec.stress or {}
     mults = _parse_floats(args.mults) if args.mults else cfg.get(
         "applicant_multipliers", stress.DEFAULT_MULTS)
     shifts = _parse_floats(args.shifts) if args.shifts else cfg.get(
         "mix_shifts", stress.DEFAULT_SHIFTS)
-    payout = (p.conversion_rate or 1.0) * (p.condition_rate or 1.0)
     payout_cv = float(cfg.get("payout_cv", 0.22))
     n_mc = args.mc if args.mc else int(cfg.get("montecarlo_n", 40000))
 
-    print(f"\n[{spec.title}]")
-    print(f"  리워드: 현재안 고정 · 기준 평균 예산반영 단가 "
-          f"{fmt_won2(model.avg_budget_cost())} (제세 제외 {fmt_won2(model.avg_reward())})")
-    print(f"  지급률 {payout:.1%} (전환 {p.conversion_rate:.1%} × 조건충족 {p.condition_rate:.1%})")
-    print(f"  당첨자 평균 이전금액 {fmt_won(model.mean_deposit())} · σ={model.sigma:.2f}")
+    payout = model.payout_rate(0.0)
+    spec_payout = (p.conversion_rate or 1.0) * (p.condition_rate or 1.0)
 
-    print(f"\n=== 축2: 이전금액 구간 비율 변동 ===")
-    print(f"{'시프트':>8}{'평균단가':>14}{'기준대비':>10}   " +
-          " ".join(f"{lab:>10}" for lab in model.labels))
-    base_cost = model.avg_budget_cost(0.0)
+    print(f"\n[{spec.title}]")
+    print(f"  금액 분포: 실측 {model.n_events}회차 평균 ({model.source})")
+    print(f"  리워드: 현재안 고정 · 평균 예산반영 단가 "
+          f"{fmt_won2(model.avg_budget_cost())} (제세 제외 {fmt_won2(model.avg_reward())})")
+    print(f"  지급률(수관 5백만원 이상) {payout:.2%} · 대상자 평균 수관금액 "
+          f"{fmt_won(model.mean_deposit())}")
+    print(f"  신청 1인당 예산 {payout*model.avg_budget_cost():,.0f}원 "
+          f"(구 로그정규 가정 {spec_payout*legacy.avg_budget_cost():,.0f}원, "
+          f"{payout*model.avg_budget_cost()/(spec_payout*legacy.avg_budget_cost())-1:+.1%})")
+
+    print(f"\n=== 축2: 수관금액 구간 비율 변동 (실측 회차 변동 방향을 눈금으로) ===")
+    print(f"  θ=0 실측 10회차 평균 · θ=+1 관측 최고({model.tilt_hi_event}) · "
+          f"θ=-1 관측 최저({model.tilt_lo_event})")
+    print(f"{'기울기':>8}{'구분':>10}{'지급률':>9}{'평균단가':>13}{'신청1인당':>11}"
+          f"{'기준대비':>9}   " + " ".join(f"{lab:>10}" for lab in model.labels))
+    base_per = payout * model.avg_budget_cost()
     for s in shifts:
         sh = model.shares(s)
         c = model.avg_budget_cost(s)
-        print(f"{s:>+8.0%}{fmt_won2(c):>14}{c/base_cost:>9.2f}x   " +
-              " ".join(f"{x*100:>9.1f}%" for x in sh))
+        pr = model.payout_rate(s)
+        print(f"{stress.shift_tick(s):>8}{stress.shift_label(s):>10}{pr:>8.2%}"
+              f"{fmt_won2(c):>13}{pr*c:>10,.0f}원{pr*c/base_per:>8.2f}x   "
+              + " ".join(f"{x*100:>9.1f}%" for x in sh))
+
+    print(f"\n=== 참고: 회차별 실측 분포 (가정 없이 관측치 그대로) ===")
+    ev = stress.event_scenarios(1.0, events)
+    print(f"{'회차':>8}{'지급률':>9}{'평균단가':>13}{'신청1인당':>11}{'평균대비':>9}"
+          f"{'등가시프트':>11}")
+    for row in ev:
+        print(f"{row['event']:>8}{row['payout_rate']:>8.2%}"
+              f"{fmt_won2(row['avg_cost']):>13}{row['per_applicant']:>10,.0f}원"
+              f"{row['per_applicant']/base_per:>8.2f}x"
+              f"{stress.shift_tick(stress.equivalent_shift(model, row['per_applicant'])):>11}")
 
     fc = forecasts[p.name]
     per_round = {}
     for i, rnd in enumerate(fc.rounds):
         base = fc.applicants[rnd][1]
-        cells = stress.stress_matrix(base, model, payout, mults, shifts)
+        cells = stress.stress_matrix(base, model, None, mults, shifts)
         # 회차마다 시드를 달리해 독립 추출 → 합산 시 분산효과 하한을 얻는다.
-        mc = stress.stress_montecarlo(base, model, payout, payout_cv,
+        mc = stress.stress_montecarlo(base, model, None, payout_cv,
+                                      shift_band=(min(shifts), 0.0, max(shifts)),
                                       n=n_mc, seed=42 + i)
-        per_round[rnd] = {"base": base, "cells": cells, "mc": mc}
+        per_round[rnd] = {"base": base, "cells": cells, "mc": mc,
+                          "events": stress.event_scenarios(base, events)}
 
         by = {(c["mult"], c["shift"]): c for c in cells}
         print(f"\n=== {rnd} 스트레스 매트릭스 (기준 신청자 {fmt_n(base)}) ===")
-        print(f"{'배수':>8}" + "".join(f"{s:>+14.0%}" for s in shifts))
+        print(f"{'배수':>8}" + "".join(f"{stress.shift_tick(s):>14}" for s in shifts))
         for m in mults:
             print(f"{m:>7.1f}x" + "".join(f"{fmt_won(by[(m, s)]['total']):>14}"
                                           for s in shifts))
         w = stress.worst_case(cells)
         b = by[(1.0, 0.0)]
-        print(f"  기준셀 {fmt_won(b['total'])} → worst(×{w['mult']:.1f}/+{w['shift']:.0%}) "
+        print(f"  기준셀 {fmt_won(b['total'])} → worst(×{w['mult']:.1f}/{stress.shift_tick(w['shift'])}) "
               f"{fmt_won(w['total'])} (×{w['total']/b['total']:.2f})")
         print(f"  MC: P50 {fmt_won(mc['p50'])} | P90 {fmt_won(mc['p90'])} | "
               f"P95 {fmt_won(mc['p95'])} | P99 {fmt_won(mc['p99'])}")
@@ -162,7 +186,8 @@ def cmd_stress(args):
           f"{fmt_won(portfolio['comonotonic_p90'])}(공통충격)")
 
     md = report.build_stress_report(spec, model, payout, per_round, mults, shifts,
-                                    portfolio)
+                                    portfolio, events=events, legacy=legacy,
+                                    spec_payout=spec_payout)
     path = report.write_stress_report(spec, md)
     print(f"\n리포트 생성: {path}")
 

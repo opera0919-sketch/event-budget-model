@@ -29,10 +29,19 @@ pension_transfer_2026:
     - {label: "2억~3억",     lower: 200000000, upper: 300000000, reward: 600000}
     - {label: "3억 이상",    lower: 300000000, upper: null,      reward: 1000000}
 
-  # 당첨자 이전금액 분포(로그정규) 앵커 — 실적 2개 지표로 mu·sigma를 역산한다.
+  # 타사수관금액 구간별 고객 분포 — 실측(11회차). 이것이 기본 분포다.
+  # 구간 안쪽은 로그축 균등으로 보간한다. 1.5배 인정 규칙 때문에 리워드 구간 경계가
+  # 실측 구간 안쪽(예: 실제 2,000만원)에 떨어져 구간을 쪼개 적분해야 하기 때문.
+  amount_distribution:
+    source: data/transfer_amount_distribution.csv
+    mature_only: true      # 집계 미성숙 회차(1647) 제외
+    min_amount: 100000     # 최저 구간 [0, 5백만) 하한 대체값 — 로그축 보간용 가정
+    max_amount: 1000000000 # 최상위 열린 구간 [3억, ∞) 상한 대체값(현 데이터 질량 0)
+
+  # (참고·비교용) 실측 분포 이전에 쓰던 로그정규 가정. 실적 2개 지표로 mu·sigma 역산.
   #   (a) P(이전금액 >= 최저구간 하한) = anchor_condition_rate
   #   (b) 평균 예산반영 단가          = anchor_avg_budget_cost
-  # 해: 평균 이전금액 ≈ 1,933만원, sigma ≈ 1.62 (실적 관측범위 1,199~2,578만원 내)
+  # 실측 분포로 치환한 뒤에는 대조군으로만 쓴다(tiers.load_tier_model).
   deposit_dist:
     anchor_condition_rate: 0.51      # 조건충족률(당첨/순입금) 최근 실측
     anchor_avg_budget_cost: 127665   # 당첨 1인당 예산반영 단가(원) 최근 실측

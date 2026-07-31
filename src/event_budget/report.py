@@ -185,27 +185,33 @@ def write_backtest_report(spec, markdown: str) -> str:
 
 def build_stress_report(spec, model, payout_rate: float, per_round: dict,
                         mults: list[float], shifts: list[float],
-                        portfolio: dict | None = None) -> str:
-    """리워드 현행 유지 시 신청자수·이전금액구간 2축 스트레스 테스트 리포트.
+                        portfolio: dict | None = None, events: dict | None = None,
+                        legacy=None, spec_payout: float | None = None) -> str:
+    """리워드 현행 유지 시 신청자수·수관금액구간 2축 스트레스 테스트 리포트.
 
-    per_round: {회차: {"base": 기준신청자, "cells": [...], "mc": {...}}}
+    per_round: {회차: {"base": 기준신청자, "cells": [...], "mc": {...}, "events": [...]}}
     """
-    from .stress import mult_label, shift_label
+    from .stress import (equivalent_shift, event_scenarios, mult_label,
+                         shift_label, shift_tick)
+
+    base_per = payout_rate * model.avg_budget_cost(0.0)
 
     L = [f"# {spec.title}", "",
          f"- 이벤트 ID: `{spec.event_id}`",
          f"- 생성일: {date.today().isoformat()}",
          f"- 리워드: **현재안 고정**(구간별 금액 불변). 흔드는 축은 신청 고객 수와 "
-         f"타사이전금액 구간 비율 2개.",
-         f"- 지급률(당첨/신청) {payout_rate:.1%} 고정 · 기준 신청자는 take-rate 모델 예측(기준선)", ""]
+         f"타사수관금액 구간 비율 2개.",
+         f"- 금액 구간 분포: **실측 {model.n_events}회차 평균** "
+         f"(`{model.source}`) — 가정 분포가 아니라 관측 데이터",
+         f"- 기준 신청자는 take-rate 모델 예측(기준선)", ""]
 
     # 1. 리워드 구조
     L.append("## 1. 리워드 구조 (현재안)")
     L.append("")
-    L.append("- 실적 인정: 타사이전금액 **1천만원 이상이면 ×1.5배**를 실적으로 인정")
+    L.append("- 실적 인정: 타사수관금액 **1천만원 이상이면 ×1.5배**를 실적으로 인정")
     L.append("- 제세금: 리워드 **5만원 이상**이면 예산반영액 = 리워드 ÷ 0.78")
     L.append("")
-    L.append("| 인정실적 구간 | 리워드 | 예산반영액 | 실제 이전금액 구간 | 기준 비율 |")
+    L.append("| 인정실적 구간 | 리워드 | 예산반영액 | 실제 수관금액 구간 | 대상자 중 비율 |")
     L.append("|---|---|---|---|---|")
     base_shares = model.shares(0.0)
     for i, lab in enumerate(model.labels):
@@ -216,37 +222,91 @@ def build_stress_report(spec, model, payout_rate: float, per_round: dict,
         L.append(f"| {lab} | {fmt_won2(model.rewards[i])} | {fmt_won2(model.gross[i])} | "
                  f"{rng} | {base_shares[i]*100:.1f}% |")
     L.append("")
-    L.append(f"- 기준 평균 예산반영 단가 **{fmt_won2(model.avg_budget_cost())}** "
+    L.append(f"- 평균 예산반영 단가 **{fmt_won2(model.avg_budget_cost())}** "
              f"(제세 제외 평균 리워드 {fmt_won2(model.avg_reward())})")
-    L.append(f"- 당첨자 평균 이전금액 {fmt_won(model.mean_deposit())} · "
-             f"로그정규 σ={model.sigma:.2f}")
+    L.append(f"- 지급률(수관금액 5백만원 이상) **{payout_rate:.2%}** · "
+             f"대상자 평균 수관금액 {fmt_won(model.mean_deposit())}")
+    L.append(f"- **신청 1인당 예산 {base_per:,.0f}원** = 지급률 × 평균 단가")
     L.append("")
 
-    # 2. 믹스 시프트
-    L.append("## 2. 축2 — 타사이전금액 구간 비율 변동")
+    # 1-1. 실측 분포 치환 효과
+    if legacy is not None and spec_payout:
+        old_per = spec_payout * legacy.avg_budget_cost(0.0)
+        L.append("### 실측 분포 치환 효과")
+        L.append("")
+        L.append("금액 구간 분포를 가정(로그정규)에서 실측으로 바꾼 결과. 지급률과 단가가 "
+                 "크게 달라지지만 **곱인 신청 1인당 예산은 비슷하게 수렴**한다 — "
+                 "두 방식이 같은 총예산을 다르게 분해하고 있었다는 뜻이다.")
+        L.append("")
+        L.append("| 구분 | 지급률 | 평균 단가 | 신청 1인당 예산 |")
+        L.append("|---|---|---|---|")
+        L.append(f"| 이전(로그정규 가정) | {spec_payout:.2%} | "
+                 f"{fmt_won2(legacy.avg_budget_cost(0.0))} | {old_per:,.0f}원 |")
+        L.append(f"| **현재(실측 분포)** | **{payout_rate:.2%}** | "
+                 f"**{fmt_won2(model.avg_budget_cost(0.0))}** | **{base_per:,.0f}원** |")
+        L.append(f"| 차이 | {payout_rate/spec_payout-1:+.1%} | "
+                 f"{model.avg_budget_cost(0.0)/legacy.avg_budget_cost(0.0)-1:+.1%} | "
+                 f"{base_per/old_per-1:+.1%} |")
+        L.append("")
+        L.append("로그정규 가정은 저액 구간을 크게 과대평가했다(최저 구간 비중 32.6% vs "
+                 "실측 5.6%). 실측 분포는 대상자가 적고 1인당 단가는 높은 구조다.")
+        L.append("")
+
+    # 2. 회차별 실측 분포
+    if events:
+        L.append("## 2. 실측 분포 — 회차별 관측치")
+        L.append("")
+        L.append("가정 없이 관측된 분포만으로 계산한 값이다. 이 변동 폭이 축2 시나리오의 "
+                 "눈금이 된다.")
+        L.append("")
+        L.append("| 회차 | 지급률 | 평균 단가 | 신청 1인당 | 평균 대비 | 등가 시프트 |")
+        L.append("|---|---|---|---|---|---|")
+        for row in event_scenarios(1.0, events):
+            L.append(f"| {row['event']} | {row['payout_rate']:.2%} | "
+                     f"{fmt_won2(row['avg_cost'])} | {row['per_applicant']:,.0f}원 | "
+                     f"×{row['per_applicant']/base_per:.2f} | "
+                     f"{shift_tick(equivalent_shift(model, row['per_applicant']))} |")
+        L.append("")
+        L.append("> **연말효과 가정과 실측이 어긋난다.** 데이터상 유일한 12월 단독 회차인 "
+                 "1536(202512)이 10회차 중 **최저**(신청 1인당 평균 대비 ×0.58)이고, "
+                 "최고는 9월 회차 1470(202509, ×1.59)이다. "
+                 "'연말에 대량입금 고객이 몰린다'는 가정은 이 데이터로는 지지되지 않으므로, "
+                 "축2의 상향 시나리오는 계절 효과가 아니라 **일반적인 상방 리스크**로 읽어야 한다.")
+        L.append("")
+
+    # 3. 믹스 시프트
+    L.append("## 3. 축2 — 수관금액 구간 비율 변동")
     L.append("")
-    L.append("연말 일시 대량입금 고객 유입을 **이전금액 분포의 중앙값 상향률**로 표현한다. "
-             "구간 비율은 상향된 분포를 구간 경계로 다시 적분해 산출하므로 합계는 항상 100%다.")
+    L.append("실측 분포를 금액축에서 통째로 이동시킨다(중앙값 상향률). 구간 비율은 이동한 "
+             "분포를 리워드 구간 경계로 다시 적분해 산출하므로 합계는 항상 100%다. "
+             "**지급률도 함께 움직인다** — 분포가 오르면 5백만원 문턱을 넘는 고객이 늘기 "
+             "때문이며, 이것이 대량입금 유입의 실제 작동 방식이다.")
     L.append("")
-    header = "| 시프트 | 시나리오 | " + " | ".join(model.labels) + " | 평균 단가 | 기준대비 |"
+    L.append(f"눈금은 실측 회차 변동 방향 그 자체다: **θ=0 은 성숙 10회차 평균, "
+             f"θ=+1 은 관측 최고 회차({model.tilt_hi_event}), "
+             f"θ=-1 은 관측 최저 회차({model.tilt_lo_event})**. "
+             f"|θ|>1 은 관측 범위를 벗어난 외삽 구간이다.")
+    L.append("")
+    header = ("| 기울기 | 구분 | 지급률 | " + " | ".join(model.labels) +
+              " | 평균 단가 | 신청 1인당 | 기준대비 |")
     L.append(header)
-    L.append("|---" * (len(model.labels) + 4) + "|")
-    base_cost = model.avg_budget_cost(0.0)
+    L.append("|---" * (len(model.labels) + 6) + "|")
     for s in shifts:
         sh = model.shares(s)
         cost = model.avg_budget_cost(s)
-        L.append(f"| +{s:.0%} | {shift_label(s)} | "
+        pr = model.payout_rate(s)
+        L.append(f"| {shift_tick(s)} | {shift_label(s)} | {pr:.2%} | "
                  + " | ".join(f"{x*100:.1f}%" for x in sh)
-                 + f" | {fmt_won2(cost)} | ×{cost/base_cost:.2f} |")
+                 + f" | {fmt_won2(cost)} | {pr*cost:,.0f}원 | ×{pr*cost/base_per:.2f} |")
     L.append("")
 
-    # 3. 회차별 매트릭스
-    L.append("## 3. 스트레스 매트릭스 — 회차별 총예산")
+    # 4. 회차별 매트릭스
+    L.append("## 4. 스트레스 매트릭스 — 회차별 총예산")
     L.append("")
     for rnd, d in per_round.items():
         L.append(f"### {rnd}  (기준 신청자 {fmt_n(d['base'])}명)")
         L.append("")
-        L.append("| 신청 배수 | " + " | ".join(f"+{s:.0%}<br>{shift_label(s)}" for s in shifts) + " |")
+        L.append("| 신청 배수 | " + " | ".join(f"{shift_tick(s)}<br>{shift_label(s)}" for s in shifts) + " |")
         L.append("|---" * (len(shifts) + 1) + "|")
         by = {(c["mult"], c["shift"]): c for c in d["cells"]}
         for m in mults:
@@ -257,24 +317,24 @@ def build_stress_report(spec, model, payout_rate: float, per_round: dict,
         L.append("")
         w = max(d["cells"], key=lambda c: c["total"])
         b = by[(1.0, 0.0)]
-        L.append(f"- 기준셀(×1.0 / +0%): **{fmt_won(b['total'])}** "
+        L.append(f"- 기준셀(×1.0 / θ=0, 실측평균): **{fmt_won(b['total'])}** "
                  f"(당첨 {fmt_n(b['recipients'])}명)")
-        L.append(f"- worst case(×{w['mult']:.1f} / +{w['shift']:.0%}): "
+        L.append(f"- worst case(×{w['mult']:.1f} / {shift_tick(w['shift'])}): "
                  f"**{fmt_won(w['total'])}** — 기준 대비 **×{w['total']/b['total']:.2f}**")
+        if d.get("events"):
+            lo_e, hi_e = d["events"][0], d["events"][-1]
+            L.append(f"- 실측 회차 범위만으로도(신청 배수 ×1.0): "
+                     f"{fmt_won(lo_e['total'])}({lo_e['event']}) ~ "
+                     f"{fmt_won(hi_e['total'])}({hi_e['event']})")
         L.append("")
 
-    # 4. 몬테카를로
-    L.append("## 4. 몬테카를로 — 불확실성 결합")
+    # 5. 몬테카를로
+    L.append("## 5. 몬테카를로 — 불확실성 결합")
     L.append("")
-    L.append("신청 배수(삼각 0.8/1.0/1.8) · 믹스 시프트(삼각 0/0/+150%) · "
-             "지급률(Beta)을 동시에 흔들어 총예산 분포를 얻는다. "
-             "시프트의 최빈값을 0으로 두어 '상향은 상방 리스크'라는 비대칭을 반영했다.")
-    L.append("")
-    L.append("> **읽는 법**: P50이 위 매트릭스의 기준셀(×1.0 / +0%)보다 높게 나온다. "
-             "두 축 모두 최빈값에서 위쪽으로 더 멀리 뻗은 삼각분포(배수는 -0.2/+0.8, "
-             "시프트는 0/+1.5)라 중앙값이 최빈값 위에 형성되기 때문이다. "
-             "이는 오류가 아니라 '하방보다 상방 여지가 크다'는 시나리오 설정의 귀결이며, "
-             "배수·시프트 범위를 대칭으로 바꾸면 P50은 기준셀로 내려온다.")
+    L.append(f"신청 배수(삼각 0.8/1.0/1.8) · 믹스 기울기(삼각 {shift_tick(min(shifts))}/"
+             f"θ=0/{shift_tick(max(shifts))}) · 지급률 잔여 잡음을 동시에 흔들어 총예산 "
+             "분포를 얻는다. 기울기 밴드는 실측 관측 범위에서 왔고 최빈값은 10회차 "
+             "평균이다 — 임의 가정이 아니라 데이터가 눈금이다.")
     L.append("")
     L.append("| 회차 | 기대값 | P50 | P90(편성 권고) | P95 | P99 |")
     L.append("|---|---|---|---|---|---|")
@@ -292,24 +352,26 @@ def build_stress_report(spec, model, payout_rate: float, per_round: dict,
                  f"{fmt_won(portfolio['comonotonic_p90'])}, P95가 "
                  f"{fmt_won(portfolio['comonotonic_p95'])}로 올라간다. "
                  f"실제 편성치는 **{fmt_won(portfolio['p90'])} ~ "
-                 f"{fmt_won(portfolio['comonotonic_p90'])}** 사이이며, 연말 대량입금처럼 "
-                 f"회차를 가로지르는 충격을 크게 볼수록 상단에 가깝다.")
+                 f"{fmt_won(portfolio['comonotonic_p90'])}** 사이다.")
     L.append("")
 
-    # 5. 가정
-    L.append("## 5. 가정과 한계")
+    # 6. 가정
+    L.append("## 6. 가정과 한계")
     L.append("")
-    L.append("1. 당첨자 이전금액은 로그정규 분포로 가정하고, 실적 2개 지표"
-             "(조건충족률 51%, 평균 예산반영 단가 12.77만원)로 mu·sigma를 역산했다. "
-             "구간표·1.5배 인정·제세 규칙을 모두 적용한 모델이 최근 실측 단가를 "
-             "그대로 재현하므로 기준선이 검증된다.")
-    L.append("2. 지급률(당첨/신청)은 신청자 수 변동과 독립이라고 가정했다. 유입이 급증하면 "
-             "질이 희석돼 지급률이 낮아질 수 있어, 이 가정은 예산을 **보수적(과대)** 으로 만든다.")
-    L.append("3. 2026_04 회차는 시즌4 take-rate에 연말효과가 이미 일부 반영돼 있다. "
+    L.append("1. 금액 구간 분포는 **실측 11회차 중 집계가 성숙한 10회차의 단순평균**이다. "
+             "회차별 고객 수가 없어 가중평균은 불가했다. 진행 초기라 수관 실적이 잡히지 "
+             "않은 1647(202608~)은 제외했다.")
+    L.append("2. 구간 안쪽 분포는 **로그축 균등**으로 보간했다. 1.5배 인정 규칙 때문에 "
+             "리워드 구간 경계가 실측 구간 안쪽(예: 실제 2,000만원)에 떨어져 쪼개 적분해야 "
+             "하기 때문이다. 구간 경계에서는 실측치를 정확히 재현한다.")
+    L.append("3. 최저 구간 `[0, 5백만)`의 하한은 10만원으로 가정했다(로그축 보간용). "
+             "이 값은 시프트가 클 때 지급률 상승폭에만 영향을 준다.")
+    L.append("4. 2026_04 회차는 시즌4 take-rate에 연말효과가 이미 일부 반영돼 있다. "
              "따라서 배수 1.8은 모델 기준선 **대비 추가** 변동으로 해석해야 하며, "
              "연말효과를 이중으로 계상하지 않도록 주의한다.")
-    L.append("4. 믹스 시프트는 분포 전체의 중앙값 상향으로 모델링했다. 대량입금 고객이 "
-             "신규 유입되면 조건충족률도 함께 오를 수 있으나 지급률은 고정했다.")
+    L.append("5. 실측 분포는 신청 고객 전체 기준으로 읽었다(5백만원 미만 78.8% 포함). "
+             "이 해석에서 지급률 21.19%가 나오며, 이전 모델의 32.5%와는 다르지만 "
+             "신청 1인당 예산으로 환산하면 두 값이 수렴한다(위 표 참조).")
     L.append("")
     return "\n".join(L)
 

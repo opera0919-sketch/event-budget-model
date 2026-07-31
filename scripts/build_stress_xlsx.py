@@ -74,24 +74,31 @@ def main():
     benchmarks = apply_calibration(history, spec.products, raw)
 
     product = next(p for p in spec.products if p.reward_tier_key)
-    model = tiers.load_tier_model(product.reward_tier_key, product.reward_tiers_path)
+    model = tiers.load_empirical_tier_model(product.reward_tier_key,
+                                            product.reward_tiers_path)
+    events = tiers.event_tier_models(product.reward_tier_key, product.reward_tiers_path)
+    legacy = tiers.load_tier_model(product.reward_tier_key, product.reward_tiers_path)
     fc = demand.predict_product(history, product, benchmarks, spec.forecast_rounds, market)
 
     cfg = spec.stress or {}
     mults = cfg.get("applicant_multipliers", stress.DEFAULT_MULTS)
     shifts = cfg.get("mix_shifts", stress.DEFAULT_SHIFTS)
-    payout = product.conversion_rate * product.condition_rate
+    payout = model.payout_rate(0.0)
+    spec_payout = product.conversion_rate * product.condition_rate
     payout_cv = float(cfg.get("payout_cv", 0.22))
     n_mc = int(cfg.get("montecarlo_n", 40000))
+    base_per = model.per_applicant(0.0)
 
     per_round = {}
     for i, rnd in enumerate(fc.rounds):
         base = fc.applicants[rnd][1]
         per_round[rnd] = {
             "base": base,
-            "cells": stress.stress_matrix(base, model, payout, mults, shifts),
-            "mc": stress.stress_montecarlo(base, model, payout, payout_cv,
+            "cells": stress.stress_matrix(base, model, None, mults, shifts),
+            "mc": stress.stress_montecarlo(base, model, None, payout_cv,
+                                           shift_band=(min(shifts), 0.0, max(shifts)),
                                            n=n_mc, seed=42 + i),
+            "events": stress.event_scenarios(base, events),
         }
     portfolio = stress.portfolio_montecarlo({k: v["mc"] for k, v in per_round.items()})
 
@@ -104,7 +111,8 @@ def main():
     r = 3
     ws.cell(row=r, column=1, value="A. 회차별 예산 (단위: 억원)").font = SUB_FONT
     r += 1
-    head(ws, r, ["회차", "기준 신청자", "기준셀(×1.0/+0%)", "worst case(×1.8/+150%)",
+    head(ws, r, ["회차", "기준 신청자", "기준셀(×1.0/θ=0)",
+                 f"worst case(×{max(mults):.1f}/θ={max(shifts):+.1f})",
                  "worst 배율", "MC P90"],
          width=[16, 14, 20, 22, 12, 14])
     r += 1
@@ -132,12 +140,13 @@ def main():
     head(ws, r, ["구분", "금액(억)", "설명"], width=[16, 14, 62])
     r += 1
     for label, val, note in [
-        ("기준셀 합", b_sum / EOK, "신청 현 수준 유지 + 구간 믹스 현행유지"),
-        ("MC P50", portfolio["p50"] / EOK, "배수·시프트 상방 비대칭이 반영된 중앙값"),
+        ("기준셀 합", b_sum / EOK, "신청 현 수준 유지 + 금액 구간 믹스 = 실측 10회차 평균"),
+        ("MC P50", portfolio["p50"] / EOK, "배수·기울기 상방 비대칭이 반영된 중앙값"),
         ("MC P90 (회차 독립)", portfolio["p90"] / EOK, "회차별 충격이 독립일 때 — 분산효과 최대, 하한"),
         ("MC P90 (공통충격)", portfolio["comonotonic_p90"] / EOK,
          "모든 회차가 함께 움직일 때 — 상한. 연말 대량입금처럼 회차를 가로지르는 충격이 크면 이쪽"),
-        ("worst case 합", w_sum / EOK, "결정론 최악 셀(×1.8 신청 × +150% 믹스 상향)"),
+        ("worst case 합", w_sum / EOK,
+         f"결정론 최악 셀(신청 ×{max(mults):.1f} × 믹스 θ={max(shifts):+.1f} = 관측 범위 초과)"),
     ]:
         put(ws, r, [label, val, note], fmt="#,##0.00")
         r += 1
@@ -146,8 +155,8 @@ def main():
 
     r += 1
     ws.cell(row=r, column=1,
-            value=f"핵심: 리워드를 현재안대로 유지해도 신청자 1.8배 + 대량입금 믹스 상향이 "
-                  f"겹치면 예산은 기준 대비 약 {w_sum/b_sum:.1f}배로 늘어난다. "
+            value=f"핵심: 리워드를 현재안대로 유지해도 신청자 {max(mults):.1f}배 + 대량입금 "
+                  f"믹스 상향이 겹치면 예산은 기준 대비 약 {w_sum/b_sum:.1f}배로 늘어난다. "
                   f"편성 권고는 3회차 합 {portfolio['p90']/EOK:.1f}~"
                   f"{portfolio['comonotonic_p90']/EOK:.1f}억원(P90 범위).").font = SUB_FONT
 
@@ -160,8 +169,8 @@ def main():
     for k, v in [("리워드 구조", "현재안 그대로(구간별 금액 불변)"),
                  ("실적 인정 규칙", "타사이전금액 1천만원 이상이면 ×1.5배를 실적으로 인정"),
                  ("제세금 규칙", "리워드 5만원 이상이면 예산반영액 = 리워드 ÷ 0.78"),
-                 ("지급률(당첨/신청)", f"{payout:.1%} (전환 {product.conversion_rate:.1%}"
-                                      f" × 조건충족 {product.condition_rate:.1%})")]:
+                 ("지급률(당첨/신청)", f"{payout:.2%} — 실측 금액 분포에서 유도"
+                                      f"(수관 5백만원 이상 비중)")]:
         put(ws, r, [k, v])
         r += 1
 
@@ -170,27 +179,40 @@ def main():
     r += 1
     for k, v in [("축1 신청 고객 수", f"배수 {', '.join(f'×{m}' for m in mults)} "
                                     f"(0.8=감소, 1.0=유지, 1.8=연말효과 증가)"),
-                 ("축2 이전금액 구간 비율", f"이전금액 분포 중앙값 상향률 "
-                                        f"{', '.join(f'+{s:.0%}' for s in shifts)} "
-                                        f"(연말 일시 대량입금 고객 유입 가정)")]:
+                 ("축2 수관금액 구간 비율", f"기울기 θ = "
+                                        f"{', '.join(f'{s:+.1f}' for s in shifts)}. "
+                                        f"θ=0 실측 {model.n_events}회차 평균, "
+                                        f"θ=+1 관측 최고({model.tilt_hi_event}), "
+                                        f"θ=-1 관측 최저({model.tilt_lo_event}), "
+                                        f"|θ|>1 은 관측 범위 외삽")]:
         put(ws, r, [k, v])
         r += 1
 
     r += 1
-    ws.cell(row=r, column=1, value="[ 당첨자 이전금액 분포 — 실적으로 역산 ]").font = SUB_FONT
+    ws.cell(row=r, column=1, value="[ 수관금액 구간 분포 — 실측 데이터 ]").font = SUB_FONT
     r += 1
-    put(ws, r, ["분포 형태", "로그정규(우측 꼬리) — 소액이 다수, 대액이 소수인 입금 분포에 부합"])
+    put(ws, r, ["출처", f"{model.source} — 이벤트 회차별 타사수관금액 구간 분포"])
     r += 1
-    put(ws, r, ["앵커 (a) 조건충족률", "51% = P(이전금액 ≥ 5백만원). 최근 실측 당첨/순입금"])
+    put(ws, r, ["사용 회차", f"성숙 {model.n_events}회차 단순평균 "
+                          f"(회차별 고객 수가 없어 가중평균 불가). "
+                          f"진행 초기라 수관 실적이 안 잡힌 1647 제외"])
     r += 1
-    put(ws, r, ["앵커 (b) 평균 예산반영 단가", "127,665원. 최근 실측 예산/당첨"])
+    put(ws, r, ["구간 내부 보간", "로그축 균등. 1.5배 인정 때문에 리워드 구간 경계가 실측 구간 "
+                             "안쪽(예: 실제 2,000만원)에 떨어져 쪼개 적분해야 한다. "
+                             "구간 경계에서는 실측치를 정확히 재현"])
     r += 1
-    put(ws, r, ["역산 결과 sigma", round(model.sigma, 4)], fmt="#,##0.0000")
+    put(ws, r, ["대상자 평균 수관금액", f"{model.mean_deposit()/1e4:,.0f}만원"])
     r += 1
-    put(ws, r, ["당첨자 평균 이전금액", f"{model.mean_deposit()/1e4:,.0f}만원"])
+    put(ws, r, ["치환 효과", f"이전(로그정규 가정) 지급률 {spec_payout:.1%}×단가 "
+                          f"{legacy.avg_budget_cost()/1e4:,.1f}만원 = "
+                          f"{spec_payout*legacy.avg_budget_cost():,.0f}원/신청 → "
+                          f"실측 {payout:.2%}×{model.avg_budget_cost()/1e4:,.1f}만원 = "
+                          f"{base_per:,.0f}원/신청 "
+                          f"({base_per/(spec_payout*legacy.avg_budget_cost())-1:+.1%})"],
+        fill=BASE_FILL)
     r += 1
-    put(ws, r, ["검증", "구간표·1.5배 인정·제세 규칙을 모두 적용한 모델이 최근 실측 단가를 "
-                       "그대로 재현 → 기준선 정합성 확인"], fill=BASE_FILL)
+    put(ws, r, ["해석", "분해는 크게 달라졌지만(대상자 적고 단가 높음) 곱인 신청 1인당 예산은 "
+                      "수렴한다 — 두 방식이 같은 총예산을 다르게 쪼개고 있었다는 뜻"])
     r += 1
 
     r += 1
@@ -205,6 +227,11 @@ def main():
         "조건충족률도 함께 오를 수 있으나 지급률은 고정했다.",
         "몬테카를로 P50이 기준셀보다 높은 것은 정상이다. 두 축 모두 최빈값에서 위쪽으로 "
         "더 멀리 뻗은 삼각분포라 중앙값이 최빈값 위에 형성된다(상방 비대칭 설정의 귀결).",
+        "연말효과 가정은 실측과 어긋난다. 유일한 12월 단독 회차 1536(202512)이 10회차 중 "
+        "최저이고 최고는 9월 회차 1470(202509)이다. 축2 상향은 계절 효과가 아니라 "
+        "일반적인 상방 리스크로 읽어야 한다.",
+        "최저 구간 [0, 5백만)의 하한은 10만원으로 가정했다(로그축 보간용). 대상자 평균 "
+        "수관금액 계산에만 영향을 준다.",
     ]:
         put(ws, r, ["", note])
         r += 1
@@ -215,8 +242,8 @@ def main():
     ws = wb.create_sheet("구간별리워드")
     title(ws, "타사이전금액 구간별 리워드 (현재안) — 고정")
     r = 3
-    head(ws, r, ["인정실적 구간", "리워드(원)", "예산반영액(원)", "실제 이전금액 하한",
-                 "실제 이전금액 상한", "기준 구간비율"],
+    head(ws, r, ["인정실적 구간", "리워드(원)", "예산반영액(원)", "실제 수관금액 하한",
+                 "실제 수관금액 상한", "대상자 중 비율(실측)"],
          width=[18, 14, 16, 20, 20, 14])
     r += 1
     base_shares = model.shares(0.0)
@@ -242,30 +269,65 @@ def main():
 
     # ---------------- 믹스시프트 ----------------
     ws = wb.create_sheet("믹스시프트")
-    title(ws, "축2 — 타사이전금액 구간 비율 변동 (연말 대량입금 유입 가정)")
+    title(ws, "축2 — 수관금액 구간 비율 변동 (실측 회차 변동 방향을 눈금으로)")
     r = 3
-    head(ws, r, ["시프트", "시나리오"] + model.labels +
-         ["평균 예산반영 단가(원)", "기준대비", "당첨자 평균 이전금액(만원)"],
-         width=[10, 12] + [12] * len(model.labels) + [20, 10, 22])
+    head(ws, r, ["기울기 θ", "시나리오", "지급률"] + model.labels +
+         ["평균 예산반영 단가(원)", "신청 1인당(원)", "기준대비", "대상자 평균 수관금액(만원)"],
+         width=[10, 12, 10] + [12] * len(model.labels) + [20, 16, 10, 24])
     r += 1
-    base_cost = model.avg_budget_cost(0.0)
-    for s in shifts:
-        sh = model.shares(s)
-        cost = model.avg_budget_cost(s)
-        put(ws, r, [f"+{s:.0%}", stress.shift_label(s)] + list(sh) +
-            [round(cost), cost / base_cost, round(model.mean_deposit(s) / 1e4)])
-        for ci in range(3, 3 + len(sh)):
+    for sv in shifts:
+        sh = model.shares(sv)
+        cost = model.avg_budget_cost(sv)
+        pr = model.payout_rate(sv)
+        put(ws, r, [sv, stress.shift_label(sv), pr] + list(sh) +
+            [round(cost), round(pr * cost), pr * cost / base_per,
+             round(model.mean_deposit(sv) / 1e4)])
+        ws.cell(row=r, column=1).number_format = "+0.0;-0.0"
+        ws.cell(row=r, column=3).number_format = "0.00%"
+        for ci in range(4, 4 + len(sh)):
             ws.cell(row=r, column=ci).number_format = "0.0%"
-        ws.cell(row=r, column=3 + len(sh)).number_format = "#,##0"
-        ws.cell(row=r, column=4 + len(sh)).number_format = '#,##0.00"배"'
+        ws.cell(row=r, column=4 + len(sh)).number_format = "#,##0"
         ws.cell(row=r, column=5 + len(sh)).number_format = "#,##0"
-        if s == 0.0:
-            put(ws, r, [f"+{s:.0%}", stress.shift_label(s)], fill=BASE_FILL)
+        ws.cell(row=r, column=6 + len(sh)).number_format = '#,##0.00"배"'
+        ws.cell(row=r, column=7 + len(sh)).number_format = "#,##0"
+        if sv == 0.0:
+            put(ws, r, [sv, stress.shift_label(sv)], fill=BASE_FILL)
+            ws.cell(row=r, column=1).number_format = "+0.0;-0.0"
+        r += 1
+    r += 2
+    ws.cell(row=r, column=1,
+            value=f"※ θ=0 은 실측 {model.n_events}회차 평균, θ=+1 은 관측 최고 회차"
+                  f"({model.tilt_hi_event}), θ=-1 은 관측 최저 회차({model.tilt_lo_event}). "
+                  f"|θ|>1 은 관측 범위를 벗어난 외삽 구간이다.").font = SUB_FONT
+    r += 1
+    ws.cell(row=r, column=1,
+            value="※ 회차 간 변동은 대상자 내부 믹스가 아니라 '지급률'에 거의 전부 몰려 있다"
+                  "(단가 20.4~24.1만원 ±9% vs 지급률 13.7~31.7% ±40%). 그래서 축2는 금액축을 "
+                  "미는 대신 관측된 변동 방향을 그대로 기울기로 쓴다.")
+    r += 2
+
+    ws.cell(row=r, column=1, value="[ 회차별 실측 분포 — 가정 없이 관측치 그대로 ]").font = SUB_FONT
+    r += 1
+    head(ws, r, ["회차", "지급률", "평균 단가(원)", "신청 1인당(원)", "평균 대비", "등가 θ"],
+         width=[12, 12, 16, 16, 12, 12])
+    r += 1
+    for row in stress.event_scenarios(1.0, events):
+        put(ws, r, [row["event"], row["payout_rate"], round(row["avg_cost"]),
+                    round(row["per_applicant"]), row["per_applicant"] / base_per,
+                    stress.equivalent_shift(model, row["per_applicant"])])
+        ws.cell(row=r, column=2).number_format = "0.00%"
+        ws.cell(row=r, column=3).number_format = "#,##0"
+        ws.cell(row=r, column=4).number_format = "#,##0"
+        ws.cell(row=r, column=5).number_format = '#,##0.00"배"'
+        ws.cell(row=r, column=6).number_format = "+0.00;-0.00"
+        if row["event"] in (model.tilt_lo_event, model.tilt_hi_event):
+            for ci in range(1, 7):
+                ws.cell(row=r, column=ci).fill = WARN_FILL
         r += 1
     r += 1
     ws.cell(row=r, column=1,
-            value="※ 시프트는 이전금액 분포의 중앙값 상향률. 상향된 분포를 구간 경계로 "
-                  "다시 적분하므로 구간 비율 합계는 항상 100%다.")
+            value="※ 연말효과 가정과 실측이 어긋난다. 유일한 12월 단독 회차 1536(202512)이 "
+                  "최저이고, 최고는 9월 회차 1470(202509)이다.")
 
     # ---------------- 스트레스매트릭스 ----------------
     ws = wb.create_sheet("스트레스매트릭스")
@@ -276,7 +338,7 @@ def main():
         ws.cell(row=r, column=1,
                 value=f"{rnd}  (기준 신청자 {d['base']:,.0f}명)").font = SUB_FONT
         r += 1
-        head(ws, r, ["신청 배수"] + [f"+{s:.0%} {stress.shift_label(s)}" for s in shifts],
+        head(ws, r, ["신청 배수"] + [f"θ={s:+.1f} {stress.shift_label(s)}" for s in shifts],
              width=[18] + [16] * len(shifts))
         r += 1
         for m in mults:
@@ -294,7 +356,7 @@ def main():
                       f"(×{w['total']/b['total']:.2f}) · 기준 당첨 {b['recipients']:,.0f}명")
         r += 3
     ws.cell(row=r, column=1,
-            value="※ 연두색=기준셀(신청 유지·믹스 현행유지), 주황색=worst case.")
+            value="※ 연두색=기준셀(신청 유지 · 믹스 = 실측 10회차 평균), 주황색=worst case.")
 
     # ---------------- 몬테카를로 ----------------
     ws = wb.create_sheet("몬테카를로")
@@ -302,10 +364,12 @@ def main():
     r = 3
     ws.cell(row=r, column=1,
             value=f"방법: {n_mc:,}회 시뮬레이션. 신청배수 삼각(0.8/1.0/1.8), "
-                  f"믹스 시프트 삼각(0/0/+150%), 지급률 Beta(평균 {payout:.1%}, CV {payout_cv}).")
+                  f"믹스 기울기 삼각(θ={min(shifts):+.1f}/0/{max(shifts):+.1f}), "
+                  f"지급률은 기울기에서 유도 후 잔여 잡음 CV {payout_cv}.")
     r += 1
     ws.cell(row=r, column=1,
-            value="시프트 최빈값을 0으로 두어 '상향은 상방 리스크'라는 비대칭을 반영했다.")
+            value="기울기 밴드는 실측 관측 범위에서 왔고 최빈값은 10회차 평균(θ=0)이다 — "
+                  "임의 가정이 아니라 데이터가 눈금이다.")
     r += 2
     head(ws, r, ["회차", "기대값", "P50", "P90(편성 권고)", "P95", "P99"],
          width=[22, 14, 14, 18, 14, 14])
@@ -335,35 +399,37 @@ def main():
     ws = wb.create_sheet("WorstCase")
     title(ws, "Worst Case 분해 — 무엇이 예산을 늘리는가")
     r = 3
-    head(ws, r, ["회차", "단계", "신청자", "당첨자", "평균 단가(원)", "총예산(억)", "누적 배율"],
-         width=[14, 30, 14, 14, 16, 14, 12])
+    head(ws, r, ["회차", "단계", "신청자", "지급률", "당첨자", "평균 단가(원)",
+                 "총예산(억)", "누적 배율"],
+         width=[14, 34, 14, 10, 14, 16, 14, 12])
     r += 1
     max_m, max_s = max(mults), max(shifts)
     for rnd, d in per_round.items():
         by = {(c["mult"], c["shift"]): c for c in d["cells"]}
         base = by[(1.0, 0.0)]
         steps = [
-            ("① 기준 (신청 유지 · 믹스 현행유지)", by[(1.0, 0.0)]),
-            (f"② 신청만 ×{max_m} (연말 유입 증가)", by[(max_m, 0.0)]),
-            (f"③ 믹스만 +{max_s:.0%} (대량입금 유입)", by[(1.0, max_s)]),
-            (f"④ worst — ×{max_m} + {max_s:.0%} 동시", by[(max_m, max_s)]),
+            ("① 기준 (신청 유지 · 믹스 = 실측 10회차 평균)", by[(1.0, 0.0)]),
+            (f"② 신청만 ×{max_m} (유입 증가)", by[(max_m, 0.0)]),
+            (f"③ 믹스만 θ={max_s:+.1f} (대량입금 유입)", by[(1.0, max_s)]),
+            (f"④ worst — ×{max_m} + θ={max_s:+.1f} 동시", by[(max_m, max_s)]),
         ]
         for label, c in steps:
-            put(ws, r, [rnd, label, round(c["applicants"]), round(c["recipients"]),
-                        round(c["avg_cost"]), c["total"] / EOK,
-                        c["total"] / base["total"]])
-            for ci in (3, 4, 5):
+            put(ws, r, [rnd, label, round(c["applicants"]), c["payout_rate"],
+                        round(c["recipients"]), round(c["avg_cost"]),
+                        c["total"] / EOK, c["total"] / base["total"]])
+            for ci in (3, 5, 6):
                 ws.cell(row=r, column=ci).number_format = "#,##0"
-            ws.cell(row=r, column=6).number_format = "#,##0.00"
-            ws.cell(row=r, column=7).number_format = '#,##0.00"배"'
+            ws.cell(row=r, column=4).number_format = "0.00%"
+            ws.cell(row=r, column=7).number_format = "#,##0.00"
+            ws.cell(row=r, column=8).number_format = '#,##0.00"배"'
             if label.startswith("④"):
-                for ci in range(1, 8):
+                for ci in range(1, 9):
                     ws.cell(row=r, column=ci).fill = WARN_FILL
             r += 1
         r += 1
     ws.cell(row=r, column=1,
             value="※ 두 축은 곱으로 작용한다. 신청 배수는 총예산에 정비례하고, 믹스 상향은 "
-                  "평균 단가를 통해 곱해진다 → worst 배율 ≈ 신청배수 × 단가배율.")
+                  "지급률과 평균 단가를 함께 올린다 → worst 배율 ≈ 신청배수 × 신청1인당 배율.")
 
     os.makedirs(os.path.dirname(OUT), exist_ok=True)
     wb.save(OUT)
