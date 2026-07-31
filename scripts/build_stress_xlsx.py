@@ -77,6 +77,7 @@ def main():
     model = tiers.load_empirical_tier_model(product.reward_tier_key,
                                             product.reward_tiers_path)
     events = tiers.event_tier_models(product.reward_tier_key, product.reward_tiers_path)
+    dist_rows = tiers.load_amount_distribution()
     legacy = tiers.load_tier_model(product.reward_tier_key, product.reward_tiers_path)
     fc = demand.predict_product(history, product, benchmarks, spec.forecast_rounds, market)
 
@@ -181,7 +182,7 @@ def main():
                                     f"(0.8=감소, 1.0=유지, 1.8=연말효과 증가)"),
                  ("축2 수관금액 구간 비율", f"기울기 θ = "
                                         f"{', '.join(f'{s:+.1f}' for s in shifts)}. "
-                                        f"θ=0 실측 {model.n_events}회차 평균, "
+                                        f"θ=0 실측 {model.n_events}회차 가중, "
                                         f"θ=+1 관측 최고({model.tilt_hi_event}), "
                                         f"θ=-1 관측 최저({model.tilt_lo_event}), "
                                         f"|θ|>1 은 관측 범위 외삽")]:
@@ -191,11 +192,16 @@ def main():
     r += 1
     ws.cell(row=r, column=1, value="[ 수관금액 구간 분포 — 실측 데이터 ]").font = SUB_FONT
     r += 1
-    put(ws, r, ["출처", f"{model.source} — 이벤트 회차별 타사수관금액 구간 분포"])
+    put(ws, r, ["출처", f"{model.source} — 이벤트 회차별 타사수관금액 구간별 고객 수(실측)"])
     r += 1
-    put(ws, r, ["사용 회차", f"성숙 {model.n_events}회차 단순평균 "
-                          f"(회차별 고객 수가 없어 가중평균 불가). "
-                          f"진행 초기라 수관 실적이 안 잡힌 1647 제외"])
+    put(ws, r, ["교차 검증", "회차별 총 고객 수가 reference_deposit_events.csv 의 신청자수와 "
+                          "10건 중 9건 정확히 일치(1607 은 진행 경과로 16,356 → 17,399). "
+                          "분포의 모집단이 '신청 고객'임이 확인된다"], fill=BASE_FILL)
+    r += 1
+    put(ws, r, ["사용 회차", f"{model.n_events}회차, 고객 수 가중 통합 "
+                          f"(총 신청 {int(sum(rr['applicants'] for rr in dist_rows)):,}명, "
+                          f"리워드 대상 {int(sum(sum(rr['counts'][1:]) for rr in dist_rows)):,}명). "
+                          f"회차 규모가 4,063~19,831명으로 5배 차이나 가중이 맞다"])
     r += 1
     put(ws, r, ["구간 내부 보간", "로그축 균등. 1.5배 인정 때문에 리워드 구간 경계가 실측 구간 "
                              "안쪽(예: 실제 2,000만원)에 떨어져 쪼개 적분해야 한다. "
@@ -296,13 +302,13 @@ def main():
         r += 1
     r += 2
     ws.cell(row=r, column=1,
-            value=f"※ θ=0 은 실측 {model.n_events}회차 평균, θ=+1 은 관측 최고 회차"
+            value=f"※ θ=0 은 실측 {model.n_events}회차 가중 통합, θ=+1 은 관측 최고 회차"
                   f"({model.tilt_hi_event}), θ=-1 은 관측 최저 회차({model.tilt_lo_event}). "
                   f"|θ|>1 은 관측 범위를 벗어난 외삽 구간이다.").font = SUB_FONT
     r += 1
     ws.cell(row=r, column=1,
             value="※ 회차 간 변동은 대상자 내부 믹스가 아니라 '지급률'에 거의 전부 몰려 있다"
-                  "(단가 20.4~24.1만원 ±9% vs 지급률 13.7~31.7% ±40%). 그래서 축2는 금액축을 "
+                  "(단가 ±9% vs 지급률 13.7~31.7% ±40%). 그래서 축2는 금액축을 "
                   "미는 대신 관측된 변동 방향을 그대로 기울기로 쓴다.")
     r += 2
 
@@ -356,7 +362,7 @@ def main():
                       f"(×{w['total']/b['total']:.2f}) · 기준 당첨 {b['recipients']:,.0f}명")
         r += 3
     ws.cell(row=r, column=1,
-            value="※ 연두색=기준셀(신청 유지 · 믹스 = 실측 10회차 평균), 주황색=worst case.")
+            value="※ 연두색=기준셀(신청 유지 · 믹스 = 실측 10회차 가중 통합), 주황색=worst case.")
 
     # ---------------- 몬테카를로 ----------------
     ws = wb.create_sheet("몬테카를로")
@@ -408,7 +414,7 @@ def main():
         by = {(c["mult"], c["shift"]): c for c in d["cells"]}
         base = by[(1.0, 0.0)]
         steps = [
-            ("① 기준 (신청 유지 · 믹스 = 실측 10회차 평균)", by[(1.0, 0.0)]),
+            ("① 기준 (신청 유지 · 믹스 = 실측 10회차 가중)", by[(1.0, 0.0)]),
             (f"② 신청만 ×{max_m} (유입 증가)", by[(max_m, 0.0)]),
             (f"③ 믹스만 θ={max_s:+.1f} (대량입금 유입)", by[(1.0, max_s)]),
             (f"④ worst — ×{max_m} + θ={max_s:+.1f} 동시", by[(max_m, max_s)]),

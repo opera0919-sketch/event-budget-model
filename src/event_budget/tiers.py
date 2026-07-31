@@ -174,7 +174,11 @@ DIST_EDGES = [0.0, 5e6, 1e7, 3e7, 5e7, 1e8, 2e8, 3e8, inf]
 
 
 def load_amount_distribution(path: str = "data/transfer_amount_distribution.csv") -> list[dict]:
-    """회차별 타사수관금액 구간 분포 CSV → 행 리스트(비율은 0~1로 정규화)."""
+    """회차별 타사수관금액 구간별 고객 수 CSV → 행 리스트.
+
+    counts 는 명 수 그대로, shares 는 회차 내 비율(합=1)로 함께 담는다.
+    각 행에서 구간 합계가 applicants 와 맞는지 검증한다 — 실측 표의 전사 오류를 잡기 위함.
+    """
     import csv
 
     rows: list[dict] = []
@@ -183,28 +187,39 @@ def load_amount_distribution(path: str = "data/transfer_amount_distribution.csv"
         for r in reader:
             if not (r.get("event_no") or "").strip():
                 continue
+            counts = [float(r[c]) for c in DIST_COLUMNS]
+            total = sum(counts)
+            declared = float(r["applicants"])
+            if abs(total - declared) > 0.5:
+                raise ValueError(
+                    f"회차 {r['event_no']}: 구간 합계 {total:,.0f} != applicants "
+                    f"{declared:,.0f} — 실측 표 전사를 확인하라")
             rows.append({
                 "event_no": r["event_no"].strip(),
                 "start_ym": (r.get("start_ym") or "").strip(),
                 "end_ym": (r.get("end_ym") or "").strip(),
-                "mature": (r.get("mature") or "1").strip() == "1",
-                "shares": [float(r[c]) / 100.0 for c in DIST_COLUMNS],
+                "applicants": declared,
+                "counts": counts,
+                "shares": [c / total for c in counts],
             })
     return rows
 
 
-def average_distribution(rows: list[dict], mature_only: bool = True) -> list[float]:
-    """회차 평균 분포(합=1). 집계 미성숙 회차는 기본 제외한다.
+def average_distribution(rows: list[dict], weighted: bool = True) -> list[float]:
+    """회차 통합 분포(합=1).
 
-    회차별 고객 수가 없어 가중평균이 불가하므로 단순평균을 쓴다.
+    weighted=True(기본)면 고객 수로 가중 — 회차별 신청 규모가 4천~2만명으로 5배 차이나므로,
+    실제 모집단 분포는 가중이 맞다. False 면 회차 단순평균(회차를 동등 취급).
     """
-    use = [r for r in rows if r["mature"]] if mature_only else list(rows)
-    if not use:
-        raise ValueError("평균을 낼 회차가 없다 (mature 플래그 확인)")
-    n = len(use)
-    avg = [sum(r["shares"][i] for r in use) / n for i in range(len(DIST_COLUMNS))]
-    total = sum(avg)
-    return [a / total for a in avg]      # 반올림 잔차 보정
+    if not rows:
+        raise ValueError("평균을 낼 회차가 없다")
+    if weighted:
+        tot = [sum(r["counts"][i] for r in rows) for i in range(len(DIST_COLUMNS))]
+    else:
+        n = len(rows)
+        tot = [sum(r["shares"][i] for r in rows) / n for i in range(len(DIST_COLUMNS))]
+    s = sum(tot)
+    return [t / s for t in tot]
 
 
 @dataclass
@@ -378,8 +393,8 @@ def build_empirical_tier_model(cfg: dict, shares: list[float] | None = None,
     if shares is None:
         rows = load_amount_distribution(dcfg.get("source",
                                                  "data/transfer_amount_distribution.csv"))
-        shares = average_distribution(rows, dcfg.get("mature_only", True))
-        n_events = sum(1 for r in rows if r["mature"] or not dcfg.get("mature_only", True))
+        shares = average_distribution(rows, dcfg.get("weighted", True))
+        n_events = len(rows)
 
     dist = PiecewiseLogUniform(
         edges=list(DIST_EDGES),
@@ -427,9 +442,5 @@ def event_tier_models(key: str,
     dcfg = cfg.get("amount_distribution", {}) or {}
     rows = load_amount_distribution(dcfg.get("source",
                                              "data/transfer_amount_distribution.csv"))
-    out = {}
-    for r in rows:
-        if dcfg.get("mature_only", True) and not r["mature"]:
-            continue
-        out[r["event_no"]] = build_empirical_tier_model(cfg, shares=r["shares"], n_events=1)
-    return out
+    return {r["event_no"]: build_empirical_tier_model(cfg, shares=r["shares"], n_events=1)
+            for r in rows}

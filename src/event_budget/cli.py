@@ -120,7 +120,7 @@ def cmd_stress(args):
     spec_payout = (p.conversion_rate or 1.0) * (p.condition_rate or 1.0)
 
     print(f"\n[{spec.title}]")
-    print(f"  금액 분포: 실측 {model.n_events}회차 평균 ({model.source})")
+    print(f"  금액 분포: 실측 {model.n_events}회차 고객 수 가중 ({model.source})")
     print(f"  리워드: 현재안 고정 · 평균 예산반영 단가 "
           f"{fmt_won2(model.avg_budget_cost())} (제세 제외 {fmt_won2(model.avg_reward())})")
     print(f"  지급률(수관 5백만원 이상) {payout:.2%} · 대상자 평균 수관금액 "
@@ -130,7 +130,7 @@ def cmd_stress(args):
           f"{payout*model.avg_budget_cost()/(spec_payout*legacy.avg_budget_cost())-1:+.1%})")
 
     print(f"\n=== 축2: 수관금액 구간 비율 변동 (실측 회차 변동 방향을 눈금으로) ===")
-    print(f"  θ=0 실측 10회차 평균 · θ=+1 관측 최고({model.tilt_hi_event}) · "
+    print(f"  θ=0 실측 {model.n_events}회차 가중 · θ=+1 관측 최고({model.tilt_hi_event}) · "
           f"θ=-1 관측 최저({model.tilt_lo_event})")
     print(f"{'기울기':>8}{'구분':>10}{'지급률':>9}{'평균단가':>13}{'신청1인당':>11}"
           f"{'기준대비':>9}   " + " ".join(f"{lab:>10}" for lab in model.labels))

@@ -177,8 +177,12 @@ def test_portfolio_diversifies_below_comonotonic_sum(model):
         for i in range(3)
     }
     pf = stress.portfolio_montecarlo(per_round)
+    # 독립 합산은 분산효과가 작동해 공통충격(P90 단순합)보다 낮다
     assert pf["p90"] < pf["comonotonic_p90"]
-    assert pf["p50"] == pytest.approx(sum(r["p50"] for r in per_round.values()), rel=0.05)
+    # 기대값은 합산에서 항상 정확히 보존된다(기대값의 선형성)
+    assert pf["mean"] == pytest.approx(sum(r["mean"] for r in per_round.values()), rel=1e-9)
+    # 우편향 분포를 독립 합산하면 중앙값의 합보다 합의 중앙값이 크고, 기대값보다는 작다
+    assert sum(r["p50"] for r in per_round.values()) < pf["p50"] < pf["mean"]
 
 
 # --- 구간표 구성 -----------------------------------------------------------
@@ -204,23 +208,50 @@ def test_avg_cost_matches_manual_share_weighting(model):
 
 def test_distribution_rows_sum_to_one():
     for r in load_amount_distribution():
-        assert sum(r["shares"]) == pytest.approx(1.0, abs=0.002), r["event_no"]
+        assert sum(r["shares"]) == pytest.approx(1.0, abs=1e-9), r["event_no"]
 
 
-def test_average_distribution_excludes_immature():
+def test_distribution_counts_reconcile_with_applicants():
+    """구간별 고객 수 합계가 총 신청자 수와 정확히 맞아야 한다(전사 오류 방지)."""
     rows = load_amount_distribution()
-    avg = average_distribution(rows, mature_only=True)
-    assert sum(avg) == pytest.approx(1.0)
-    # 미성숙 회차(1647)는 100% 가 최저 구간 → 포함하면 최저 구간 비중이 올라간다
-    with_all = average_distribution(rows, mature_only=False)
-    assert with_all[0] > avg[0]
+    assert len(rows) == 10
+    for r in rows:
+        assert sum(r["counts"]) == pytest.approx(r["applicants"])
+    assert sum(r["applicants"] for r in rows) == pytest.approx(100_058)
+
+
+def test_weighted_and_unweighted_distributions_differ():
+    """회차 규모가 4천~2만명으로 5배 차이나므로 가중 여부가 결과를 바꾼다."""
+    rows = load_amount_distribution()
+    w = average_distribution(rows, weighted=True)
+    u = average_distribution(rows, weighted=False)
+    assert sum(w) == pytest.approx(1.0)
+    assert sum(u) == pytest.approx(1.0)
+    assert w[0] != pytest.approx(u[0], abs=1e-4)
+    # 규모가 큰 회차(1536/1559)가 소액 편중이라 가중하면 최저 구간 비중이 커진다
+    assert w[0] > u[0]
 
 
 def test_payout_rate_matches_observed_eligible_share(model):
-    """지급률 = 1 - (5백만원 미만 비중). 실측 10회차 평균 21.19%."""
+    """지급률 = 1 - (5백만원 미만 비중). 실측 10회차 가중 19.91%."""
     avg = average_distribution(load_amount_distribution())
-    assert model.payout_rate(0.0) == pytest.approx(1 - avg[0], abs=0.001)
-    assert model.payout_rate(0.0) == pytest.approx(0.2119, abs=0.002)
+    assert model.payout_rate(0.0) == pytest.approx(1 - avg[0], abs=1e-6)
+    assert model.payout_rate(0.0) == pytest.approx(0.19909, abs=0.0005)
+
+
+def test_payout_rate_equals_recipients_over_applicants():
+    """지급률이 실측 총 지급고객/총 신청고객(19,920/100,058)과 일치해야 한다."""
+    rows = load_amount_distribution()
+    recipients = sum(sum(r["counts"][1:]) for r in rows)
+    applicants = sum(r["applicants"] for r in rows)
+    assert recipients == pytest.approx(19_920)
+    m = load_empirical_tier_model(TIER_KEY)
+    assert m.payout_rate(0.0) == pytest.approx(recipients / applicants, abs=1e-6)
+
+
+def test_top_tier_has_nonzero_mass(model):
+    """실측 고객 수로 바꾸면서 3억 이상 구간(24명)이 살아난다 — 반올림 0.0%에 묻혔던 값."""
+    assert model.shares(0.0)[-1] > 0
 
 
 def test_empirical_unit_cost_far_above_legacy(model, legacy):

@@ -50,7 +50,8 @@ pytest tests/
 **1천만원 이상 ×1.5배 실적 인정**, **리워드 5만원 이상 제세 gross-up(÷0.78)**.
 
 금액 구간 분포는 **가정이 아니라 실측**이다(`data/transfer_amount_distribution.csv`,
-이벤트 11회차). 지급률(수관 5백만원 이상 = 21.19%)도 이 분포에서 나온다.
+이벤트 10회차 · 구간별 고객 수 · 총 신청 100,058명). 지급률도 이 분포에서 나온다 —
+리워드 대상 19,920명 ÷ 신청 100,058명 = **19.91%**.
 축2의 눈금 역시 관측된 회차 간 변동 그대로 — θ=±1이 관측 최고·최저 회차를 재현한다.
 
 > 실측 확인: 유일한 12월 단독 회차가 10회차 중 **최저**다. '연말에 대량입금이 몰린다'는
@@ -60,7 +61,7 @@ pytest tests/
 
 ```
 data/history.csv        회차별 실적(기준 고객수·신청자수). 미래 회차는 공란.
-data/transfer_amount_distribution.csv  타사수관금액 구간별 고객 분포(실측 11회차).
+data/transfer_amount_distribution.csv  타사수관금액 구간별 고객 수(실측 10회차).
 data/market.csv         (선택) 시장 지표.
 params/benchmarks.yaml  시즌 take-rate 사전값·레버 기본값.
 params/reward_tiers.yaml 타사이전금액 구간별 리워드 테이블(1.5배 인정·제세 규칙 포함).
