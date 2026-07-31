@@ -335,8 +335,9 @@ def build_stress_report(spec, model, payout_rate: float, per_round: dict,
     L.append("")
     L.append(f"신청 배수(삼각 0.8/1.0/1.8) · 믹스 기울기(삼각 {shift_tick(min(shifts))}/"
              f"θ=0/{shift_tick(max(shifts))}) · 지급률 잔여 잡음을 동시에 흔들어 총예산 "
-             "분포를 얻는다. 기울기 밴드는 실측 관측 범위에서 왔고 최빈값은 10회차 "
-             "평균이다 — 임의 가정이 아니라 데이터가 눈금이다.")
+             f"분포를 얻는다. 기울기 밴드는 실측 관측 범위에서 왔고 최빈값은 "
+             f"{model.n_events}회차 고객 수 가중 통합이다 — 임의 가정이 아니라 "
+             f"데이터가 눈금이다.")
     L.append("")
     L.append("| 회차 | 기대값 | P50 | P90(편성 권고) | P95 | P99 |")
     L.append("|---|---|---|---|---|---|")
