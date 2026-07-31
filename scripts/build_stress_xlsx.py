@@ -141,7 +141,8 @@ def main():
     head(ws, r, ["구분", "금액(억)", "설명"], width=[16, 14, 62])
     r += 1
     for label, val, note in [
-        ("기준셀 합", b_sum / EOK, "신청 현 수준 유지 + 금액 구간 믹스 = 실측 10회차 평균"),
+        ("기준셀 합", b_sum / EOK,
+         f"신청 현 수준 유지 + 금액 구간 믹스 = 실측 {model.n_events}회차 고객 수 가중"),
         ("MC P50", portfolio["p50"] / EOK, "배수·기울기 상방 비대칭이 반영된 중앙값"),
         ("MC P90 (회차 독립)", portfolio["p90"] / EOK, "회차별 충격이 독립일 때 — 분산효과 최대, 하한"),
         ("MC P90 (공통충격)", portfolio["comonotonic_p90"] / EOK,
