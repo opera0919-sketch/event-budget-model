@@ -4,8 +4,12 @@
   규칙1(실적 인정): 이전금액 >= credit_threshold 면 인정실적 = 이전금액 × credit_multiplier.
   규칙2(제세금):    리워드 >= tax_threshold 면 예산반영액 = 리워드/(1-tax_rate).
 
-구간 경계는 '인정실적' 기준이므로, 당첨자 금액분포에 적분하려면 '실제 이전금액' 축으로
-되돌려야 한다(credited_to_actual). 분포는 로그정규로 두고 실적 2개 지표로 역산한다.
+구간 경계는 '인정실적' 기준이므로, 금액분포에 적분하려면 '실제 수관금액' 축으로
+되돌려야 한다(credited_to_actual).
+
+금액 분포는 실측을 쓴다 — data/transfer_amount_distribution.csv 의 회차별 구간 고객 수를
+고객 수로 가중해 통합한다(EmpiricalTierModel). 로그정규 가정판(TierModel)은 실측 데이터를
+확보하기 전 쓰던 것으로, 지금은 대조군으로만 남겨 둔다.
 
 의존성은 numpy + 표준 statistics 만 사용한다(scipy 미도입).
 """

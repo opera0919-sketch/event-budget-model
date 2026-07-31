@@ -284,7 +284,7 @@ def build_stress_report(spec, model, payout_rate: float, per_round: dict,
              "**지급률도 함께 움직인다** — 분포가 오르면 5백만원 문턱을 넘는 고객이 늘기 "
              "때문이며, 이것이 대량입금 유입의 실제 작동 방식이다.")
     L.append("")
-    L.append(f"눈금은 실측 회차 변동 방향 그 자체다: **θ=0 은 성숙 10회차 평균, "
+    L.append(f"눈금은 실측 회차 변동 방향 그 자체다: **θ=0 은 {model.n_events}회차 고객 수 가중 통합, "
              f"θ=+1 은 관측 최고 회차({model.tilt_hi_event}), "
              f"θ=-1 은 관측 최저 회차({model.tilt_lo_event})**. "
              f"|θ|>1 은 관측 범위를 벗어난 외삽 구간이다.")
@@ -319,7 +319,7 @@ def build_stress_report(spec, model, payout_rate: float, per_round: dict,
         L.append("")
         w = max(d["cells"], key=lambda c: c["total"])
         b = by[(1.0, 0.0)]
-        L.append(f"- 기준셀(×1.0 / θ=0, 실측평균): **{fmt_won(b['total'])}** "
+        L.append(f"- 기준셀(×1.0 / θ=0, 실측가중): **{fmt_won(b['total'])}** "
                  f"(당첨 {fmt_n(b['recipients'])}명)")
         L.append(f"- worst case(×{w['mult']:.1f} / {shift_tick(w['shift'])}): "
                  f"**{fmt_won(w['total'])}** — 기준 대비 **×{w['total']/b['total']:.2f}**")
