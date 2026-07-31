@@ -1,0 +1,38 @@
+# 타사이전금액 구간별 리워드 테이블(현재안)
+#
+# 두 가지 규칙이 겹쳐 있다.
+#   규칙1 (실적 인정): 타사이전금액 >= credit_threshold 이면
+#                      인정실적 = 타사이전금액 × credit_multiplier.
+#                      (예: 2,000만원 입금 → 3,000만원 인정 → 6만원 지급)
+#   규칙2 (제세금):    리워드 >= tax_threshold 이면
+#                      예산반영액 = 리워드 + (리워드/(1-tax_rate))×tax_rate = 리워드/(1-tax_rate).
+#                      tax_threshold 미만은 제세 미반영(리워드 그대로).
+#
+# tiers 의 lower/upper 는 '인정실적' 기준 경계다. 당첨자 금액분포는 '실제 이전금액' 축에서
+# 정의되므로, tiers.py 가 규칙1을 역으로 적용해 실제금액 경계로 환산한 뒤 적분한다.
+
+pension_transfer_2026:
+  label: 연금저축 타사이전 리워드(현재안)
+
+  credit_threshold: 10000000     # 1천만원 이상부터 배수 인정
+  credit_multiplier: 1.5
+
+  tax_threshold: 50000           # 리워드 5만원 이상이면 제세 gross-up
+  tax_rate: 0.22
+
+  tiers:
+    - {label: "5백만~1천만", lower: 5000000,   upper: 10000000,  reward: 20000}
+    - {label: "1천만~3천만", lower: 10000000,  upper: 30000000,  reward: 40000}
+    - {label: "3천만~5천만", lower: 30000000,  upper: 50000000,  reward: 60000}
+    - {label: "5천만~1억",   lower: 50000000,  upper: 100000000, reward: 150000}
+    - {label: "1억~2억",     lower: 100000000, upper: 200000000, reward: 300000}
+    - {label: "2억~3억",     lower: 200000000, upper: 300000000, reward: 600000}
+    - {label: "3억 이상",    lower: 300000000, upper: null,      reward: 1000000}
+
+  # 당첨자 이전금액 분포(로그정규) 앵커 — 실적 2개 지표로 mu·sigma를 역산한다.
+  #   (a) P(이전금액 >= 최저구간 하한) = anchor_condition_rate
+  #   (b) 평균 예산반영 단가          = anchor_avg_budget_cost
+  # 해: 평균 이전금액 ≈ 1,933만원, sigma ≈ 1.62 (실적 관측범위 1,199~2,578만원 내)
+  deposit_dist:
+    anchor_condition_rate: 0.51      # 조건충족률(당첨/순입금) 최근 실측
+    anchor_avg_budget_cost: 127665   # 당첨 1인당 예산반영 단가(원) 최근 실측

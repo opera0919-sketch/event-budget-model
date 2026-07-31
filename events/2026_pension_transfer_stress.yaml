@@ -1,0 +1,49 @@
+# 시나리오 스트레스 테스트 명세 — 리워드 현재안 유지 시 예산 소요 예측
+#
+# 목적: 리워드 수준(구간별 금액)을 현재안대로 고정한 채, 아래 두 축을 흔들어
+#       회차별 예산 소요를 예측하고 worst case 를 확인한다.
+#         축1 신청 고객 수 배수: 0.8(감소) ~ 1.0(유지) ~ 1.8(증가, 연말효과)
+#         축2 타사이전금액 구간 비율: 연말 일시 대량입금 고객 유입 → 상위 구간 비중 확대
+#
+# 기존 events/2026_pension_irp.yaml 은 그대로 두고(estimate/scenario/backtest 산출 불변),
+# 구간표 기반 예산 산출은 이 명세로 분리한다.
+
+event_id: 2026_pension_transfer_stress
+title: 연금저축 타사이전 — 리워드 현행 유지 시 신청자수·금액구간 스트레스 테스트
+
+history_csv: data/history.csv
+market_csv: data/market.csv
+
+forecast_rounds: ["2026_03", "2026_04", "2027_01"]
+
+products:
+  - name: pension
+    label: 연금저축
+    base_col_end: pension_end
+    base_col_start: pension_start
+    base_mode: total_end
+    applicants_col: pension_applicants
+
+    # 구간별 차등 리워드 — params/reward_tiers.yaml 의 테이블을 사용한다.
+    # 이 키가 지정되면 예산은 avg_reward 대신 구간표(제세·1.5배 인정 포함)로 계산된다.
+    reward_tier_key: pension_transfer_2026
+
+    # 구간표 미적용 경로(estimate 등)와의 호환용 대표 단가. 구간표 shift=0 평균과 동일.
+    avg_reward: 127665
+    fixed_costs: 0
+    tax_rate: 0.0                        # 제세는 구간표에서 구간별 조건부로 처리
+
+    # 지급 퍼널 — 최근 실측(26.5~7월): 전환율 63.9%, 조건충족률 50.8% → 지급률 32.5%
+    conversion_rate: 0.639
+    condition_rate: 0.508
+
+levers:
+  goal_achievement: [0.8, 1.0, 1.2]
+  reward_payout_rate: [0.6, 0.7, 0.8]    # 구간표 경로에서는 미사용(퍼널 지급률 사용)
+
+# 스트레스 테스트 기본 그리드(CLI 옵션으로 덮어쓸 수 있음)
+stress:
+  applicant_multipliers: [0.8, 0.9, 1.0, 1.2, 1.5, 1.8]
+  mix_shifts: [0.0, 0.25, 0.5, 1.0, 1.5]   # 이전금액 분포 중앙값 상향률
+  payout_cv: 0.22                          # 지급률 변동계수(실적 기반)
+  montecarlo_n: 40000

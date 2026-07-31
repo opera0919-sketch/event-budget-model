@@ -22,6 +22,10 @@ python -m event_budget.cli scenario events/2026_pension_irp.yaml \
 # 백테스트(사후예측 정확도·밴드 커버리지 검증)
 python -m event_budget.cli backtest events/2026_pension_irp.yaml --min-train 3
 
+# 스트레스 테스트(리워드 고정 · 신청자수 × 이전금액구간 믹스 2축)
+python -m event_budget.cli stress events/2026_pension_transfer_stress.yaml
+python scripts/build_stress_xlsx.py        # 엑셀 보고서
+
 pytest tests/
 ```
 
@@ -35,15 +39,30 @@ pytest tests/
   `condition_rate`(조건충족률)를 지정하면 `예산 = 신청 × 전환율 × 조건충족률 × 리워드`로 계산.
   실적 보정값은 `data/reference_deposit_events.csv`(10회차) 참조 — 전환율 62%·조건충족 44%.
 
+## 스트레스 테스트 (리워드 현행 유지 시)
+
+리워드 수준을 **현재안대로 고정**한 채 두 축만 흔들어 예산 소요와 worst case를 확인한다.
+
+- 축1 **신청 고객 수**: 0.8배(감소) ~ 1.0배(유지) ~ 1.8배(증가, 연말효과)
+- 축2 **타사이전금액 구간 비율**: 연말 일시 대량입금 고객 유입 → 상위 구간 비중 확대
+
+구간표는 `params/reward_tiers.yaml`에 있고 두 규칙을 반영한다 —
+**1천만원 이상 ×1.5배 실적 인정**, **리워드 5만원 이상 제세 gross-up(÷0.78)**.
+당첨자 이전금액 분포는 실적(조건충족률 51%·실측 단가 12.77만원)으로 역산하며,
+그 결과가 실측 단가를 그대로 재현해 기준선 정합성이 검증된다.
+
 ## 구조
 
 ```
 data/history.csv        회차별 실적(기준 고객수·신청자수). 미래 회차는 공란.
 data/market.csv         (선택) 시장 지표.
 params/benchmarks.yaml  시즌 take-rate 사전값·레버 기본값.
+params/reward_tiers.yaml 타사이전금액 구간별 리워드 테이블(1.5배 인정·제세 규칙 포함).
 events/*.yaml           회차별 이벤트 명세(1 회차 = 1 파일).
 schema/event_schema.yaml 명세 필드 정의.
-src/event_budget/       엔진: schema/demand/budget/scenario/simulate/calibrate/report/cli.
+src/event_budget/       엔진: schema/demand/budget/scenario/simulate/calibrate/report/cli
+                        + tiers(구간 리워드)/stress(2축 스트레스 테스트).
+scripts/build_stress_xlsx.py  스트레스 결과 → 엑셀 보고서.
 reports/*.md            생성된 한국어 리포트.
 docs/methodology.md     변수 정의·모델 수식·운영 루프(상세).
 tests/                  pytest.

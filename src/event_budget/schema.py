@@ -36,6 +36,9 @@ class Product:
     payout_rate_col: str | None = None  # (선택) 회차별 실지급률 실적 컬럼
     conversion_rate: float | None = None  # 순입금/신청 (지급 퍼널 1단계)
     condition_rate: float | None = None   # 당첨(조건충족)/순입금 (지급 퍼널 2단계)
+    # 구간별 차등 리워드(타사이전금액 등). 지정 시 avg_reward 대신 구간표로 예산 산출.
+    reward_tier_key: str | None = None
+    reward_tiers_path: str = "params/reward_tiers.yaml"
 
 
 @dataclass
@@ -47,6 +50,7 @@ class EventSpec:
     products: list[Product]
     market_csv: Optional[str] = None
     levers: dict = field(default_factory=dict)
+    stress: dict = field(default_factory=dict)   # 스트레스 테스트 그리드(선택)
 
 
 def load_spec(path: str) -> EventSpec:
@@ -77,6 +81,8 @@ def load_spec(path: str) -> EventSpec:
                 payout_rate_col=p.get("payout_rate_col"),
                 conversion_rate=p.get("conversion_rate"),
                 condition_rate=p.get("condition_rate"),
+                reward_tier_key=p.get("reward_tier_key"),
+                reward_tiers_path=p.get("reward_tiers_path", "params/reward_tiers.yaml"),
             )
         )
         if products[-1].base_mode in ("start", "net_new") and not products[-1].base_col_start:
@@ -91,6 +97,7 @@ def load_spec(path: str) -> EventSpec:
         products=products,
         market_csv=raw.get("market_csv"),
         levers=raw.get("levers", {}) or {},
+        stress=raw.get("stress", {}) or {},
     )
 
 

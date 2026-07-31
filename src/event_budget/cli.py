@@ -10,11 +10,11 @@ from __future__ import annotations
 import argparse
 import sys
 
-from . import backtest, demand, report
+from . import backtest, demand, report, stress, tiers
 from .calibrate import apply_calibration
 from .scenario import scenario_grid
 from .schema import load_benchmarks, load_history, load_market, load_spec
-from .report import fmt_n, fmt_won
+from .report import fmt_n, fmt_won, fmt_won2
 
 
 def _load(spec_path):
@@ -90,6 +90,83 @@ def cmd_scenario(args):
     print(f"\n리포트 생성: {path}")
 
 
+def _stress_product(spec):
+    """스트레스 대상 상품 = reward_tier_key 를 가진 첫 상품."""
+    for p in spec.products:
+        if p.reward_tier_key:
+            return p
+    raise SystemExit("명세에 reward_tier_key 를 지정한 상품이 없다 "
+                     "(events/2026_pension_transfer_stress.yaml 참조).")
+
+
+def cmd_stress(args):
+    spec, history, benchmarks, raw, market = _load(args.spec)
+    forecasts = _forecasts(spec, history, benchmarks, market)
+
+    p = _stress_product(spec)
+    model = tiers.load_tier_model(p.reward_tier_key, p.reward_tiers_path)
+
+    cfg = spec.stress or {}
+    mults = _parse_floats(args.mults) if args.mults else cfg.get(
+        "applicant_multipliers", stress.DEFAULT_MULTS)
+    shifts = _parse_floats(args.shifts) if args.shifts else cfg.get(
+        "mix_shifts", stress.DEFAULT_SHIFTS)
+    payout = (p.conversion_rate or 1.0) * (p.condition_rate or 1.0)
+    payout_cv = float(cfg.get("payout_cv", 0.22))
+    n_mc = args.mc if args.mc else int(cfg.get("montecarlo_n", 40000))
+
+    print(f"\n[{spec.title}]")
+    print(f"  리워드: 현재안 고정 · 기준 평균 예산반영 단가 "
+          f"{fmt_won2(model.avg_budget_cost())} (제세 제외 {fmt_won2(model.avg_reward())})")
+    print(f"  지급률 {payout:.1%} (전환 {p.conversion_rate:.1%} × 조건충족 {p.condition_rate:.1%})")
+    print(f"  당첨자 평균 이전금액 {fmt_won(model.mean_deposit())} · σ={model.sigma:.2f}")
+
+    print(f"\n=== 축2: 이전금액 구간 비율 변동 ===")
+    print(f"{'시프트':>8}{'평균단가':>14}{'기준대비':>10}   " +
+          " ".join(f"{lab:>10}" for lab in model.labels))
+    base_cost = model.avg_budget_cost(0.0)
+    for s in shifts:
+        sh = model.shares(s)
+        c = model.avg_budget_cost(s)
+        print(f"{s:>+8.0%}{fmt_won2(c):>14}{c/base_cost:>9.2f}x   " +
+              " ".join(f"{x*100:>9.1f}%" for x in sh))
+
+    fc = forecasts[p.name]
+    per_round = {}
+    for i, rnd in enumerate(fc.rounds):
+        base = fc.applicants[rnd][1]
+        cells = stress.stress_matrix(base, model, payout, mults, shifts)
+        # 회차마다 시드를 달리해 독립 추출 → 합산 시 분산효과 하한을 얻는다.
+        mc = stress.stress_montecarlo(base, model, payout, payout_cv,
+                                      n=n_mc, seed=42 + i)
+        per_round[rnd] = {"base": base, "cells": cells, "mc": mc}
+
+        by = {(c["mult"], c["shift"]): c for c in cells}
+        print(f"\n=== {rnd} 스트레스 매트릭스 (기준 신청자 {fmt_n(base)}) ===")
+        print(f"{'배수':>8}" + "".join(f"{s:>+14.0%}" for s in shifts))
+        for m in mults:
+            print(f"{m:>7.1f}x" + "".join(f"{fmt_won(by[(m, s)]['total']):>14}"
+                                          for s in shifts))
+        w = stress.worst_case(cells)
+        b = by[(1.0, 0.0)]
+        print(f"  기준셀 {fmt_won(b['total'])} → worst(×{w['mult']:.1f}/+{w['shift']:.0%}) "
+              f"{fmt_won(w['total'])} (×{w['total']/b['total']:.2f})")
+        print(f"  MC: P50 {fmt_won(mc['p50'])} | P90 {fmt_won(mc['p90'])} | "
+              f"P95 {fmt_won(mc['p95'])} | P99 {fmt_won(mc['p99'])}")
+
+    portfolio = stress.portfolio_montecarlo({k: v["mc"] for k, v in per_round.items()})
+    print(f"\n=== {len(per_round)}회차 합산 포트폴리오 ===")
+    print(f"  P50 {fmt_won(portfolio['p50'])} | P90 {fmt_won(portfolio['p90'])} | "
+          f"P95 {fmt_won(portfolio['p95'])} | P99 {fmt_won(portfolio['p99'])}")
+    print(f"  편성 권고 P90 범위: {fmt_won(portfolio['p90'])}(회차 독립) ~ "
+          f"{fmt_won(portfolio['comonotonic_p90'])}(공통충격)")
+
+    md = report.build_stress_report(spec, model, payout, per_round, mults, shifts,
+                                    portfolio)
+    path = report.write_stress_report(spec, md)
+    print(f"\n리포트 생성: {path}")
+
+
 def cmd_backtest(args):
     spec, history, benchmarks, raw, market = _load(args.spec)
     min_train = args.min_train
@@ -136,6 +213,14 @@ def main(argv=None):
     ps.add_argument("--round", help="특정 회차만")
     ps.add_argument("--product", help="특정 상품(name)만")
     ps.set_defaults(func=cmd_scenario)
+
+    pt = sub.add_parser("stress",
+                        help="리워드 현행 유지 시 신청자수·이전금액구간 2축 스트레스 테스트")
+    pt.add_argument("spec", help="이벤트 명세 YAML 경로")
+    pt.add_argument("--mults", help="신청 고객수 배수 리스트 (콤마구분, 예 0.8,1.0,1.8)")
+    pt.add_argument("--shifts", help="이전금액 분포 중앙값 상향률 리스트 (콤마구분, 예 0,0.5,1.5)")
+    pt.add_argument("--mc", type=int, help="몬테카를로 시행 횟수 (기본 40000)")
+    pt.set_defaults(func=cmd_stress)
 
     pb = sub.add_parser("backtest", help="사후예측 정확도(MAPE·커버리지) 검증")
     pb.add_argument("spec", help="이벤트 명세 YAML 경로")
