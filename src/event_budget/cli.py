@@ -115,6 +115,10 @@ def cmd_stress(args):
         "mix_shifts", stress.DEFAULT_SHIFTS)
     payout_cv = float(cfg.get("payout_cv", 0.22))
     n_mc = args.mc if args.mc else int(cfg.get("montecarlo_n", 40000))
+    mc_shift = tuple(_parse_floats(args.mc_shift_band) if args.mc_shift_band
+                     else cfg.get("mc_shift_band", stress.DEFAULT_MC_SHIFT_BAND))
+    mc_mult = tuple(_parse_floats(args.mc_mult_band) if args.mc_mult_band
+                    else cfg.get("mc_mult_band", stress.DEFAULT_MC_MULT_BAND))
 
     payout = model.payout_rate(0.0)
     spec_payout = (p.conversion_rate or 1.0) * (p.condition_rate or 1.0)
@@ -160,7 +164,7 @@ def cmd_stress(args):
         cells = stress.stress_matrix(base, model, None, mults, shifts)
         # 회차마다 시드를 달리해 독립 추출 → 합산 시 분산효과 하한을 얻는다.
         mc = stress.stress_montecarlo(base, model, None, payout_cv,
-                                      shift_band=(min(shifts), 0.0, max(shifts)),
+                                      mult_band=mc_mult, shift_band=mc_shift,
                                       n=n_mc, seed=42 + i)
         per_round[rnd] = {"base": base, "cells": cells, "mc": mc,
                           "events": stress.event_scenarios(base, events)}
@@ -179,7 +183,9 @@ def cmd_stress(args):
               f"P95 {fmt_won(mc['p95'])} | P99 {fmt_won(mc['p99'])}")
 
     portfolio = stress.portfolio_montecarlo({k: v["mc"] for k, v in per_round.items()})
-    print(f"\n=== {len(per_round)}회차 합산 포트폴리오 ===")
+    print(f"\n=== {len(per_round)}회차 합산 포트폴리오 "
+          f"(MC 밴드: 배수 {mc_mult[0]}~{mc_mult[2]} · "
+          f"θ {mc_shift[0]:+.1f}~{mc_shift[2]:+.1f}) ===")
     print(f"  P50 {fmt_won(portfolio['p50'])} | P90 {fmt_won(portfolio['p90'])} | "
           f"P95 {fmt_won(portfolio['p95'])} | P99 {fmt_won(portfolio['p99'])}")
     print(f"  편성 권고 P90 범위: {fmt_won(portfolio['p90'])}(회차 독립) ~ "
@@ -187,7 +193,8 @@ def cmd_stress(args):
 
     md = report.build_stress_report(spec, model, payout, per_round, mults, shifts,
                                     portfolio, events=events, legacy=legacy,
-                                    spec_payout=spec_payout)
+                                    spec_payout=spec_payout,
+                                    mc_mult_band=mc_mult, mc_shift_band=mc_shift)
     path = report.write_stress_report(spec, md)
     print(f"\n리포트 생성: {path}")
 
@@ -245,6 +252,10 @@ def main(argv=None):
     pt.add_argument("--mults", help="신청 고객수 배수 리스트 (콤마구분, 예 0.8,1.0,1.8)")
     pt.add_argument("--shifts", help="이전금액 분포 중앙값 상향률 리스트 (콤마구분, 예 0,0.5,1.5)")
     pt.add_argument("--mc", type=int, help="몬테카를로 시행 횟수 (기본 40000)")
+    pt.add_argument("--mc-shift-band", dest="mc_shift_band",
+                    help="MC 기울기 밴드 lo,mode,hi (기본 -1.0,0,1.0 = 실측 관측 범위)")
+    pt.add_argument("--mc-mult-band", dest="mc_mult_band",
+                    help="MC 신청배수 밴드 lo,mode,hi (기본 0.8,1.0,1.2)")
     pt.set_defaults(func=cmd_stress)
 
     pb = sub.add_parser("backtest", help="사후예측 정확도(MAPE·커버리지) 검증")

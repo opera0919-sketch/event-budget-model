@@ -152,23 +152,44 @@ def test_montecarlo_quantiles_ordered(model):
 def test_montecarlo_sits_between_base_and_worst_case(model):
     """분포는 기준셀과 worst case 사이에 놓인다.
 
-    P50이 기준셀보다 높은 것은 정상이다. 신청배수(0.8/1.0/1.8)와 기울기(-1/0/+1.5)가
-    모두 우측으로 치우친 삼각분포라 중앙값이 최빈값보다 위에 형성되기 때문 —
-    '상방 리스크가 하방보다 크다'는 시나리오 설정을 그대로 반영한 결과다.
+    MC 기본 밴드는 관측 범위(배수 0.8~1.2, 기울기 -1~+1)로 대칭에 가까워, P50 은
+    기준셀 근처에 놓인다. 관측 범위 밖 극단은 결정론 매트릭스의 worst case 가 담당하므로
+    분포 전체가 worst case 아래에 있어야 한다.
     """
     base = stress.cell(10_000, 1.0, 0.0, model)["total"]
     worst = stress.cell(10_000, 1.8, 1.5, model)["total"]
     mc = stress.stress_montecarlo(10_000, model, n=20000)
-    assert base < mc["p50"] < mc["p99"] < worst
+    assert mc["p5"] < mc["p50"] < mc["p99"] < worst
+    assert mc["p50"] == pytest.approx(base, rel=0.2)
 
 
 def test_montecarlo_p50_tracks_expected_multiplier(model):
-    """P50 ≈ 기준셀 × (배수 평균 1.2) × (기울기 평균 0.167의 신청1인당 배율)."""
+    """P50 ≈ 기준셀 × (배수 평균) × (기울기 평균의 신청1인당 배율)."""
+    lo_m, mo_m, hi_m = stress.DEFAULT_MC_MULT_BAND
+    lo_s, mo_s, hi_s = stress.DEFAULT_MC_SHIFT_BAND
     base = stress.cell(10_000, 1.0, 0.0, model)["total"]
-    theta_mean = (-1.0 + 0.0 + 1.5) / 3
-    expected = base * 1.2 * (model.per_applicant(theta_mean) / model.per_applicant(0.0))
+    expected = (base * ((lo_m + mo_m + hi_m) / 3)
+                * model.per_applicant((lo_s + mo_s + hi_s) / 3) / model.per_applicant(0.0))
     mc = stress.stress_montecarlo(10_000, model, n=20000)
     assert mc["p50"] == pytest.approx(expected, rel=0.15)
+
+
+def test_montecarlo_default_bands_stay_inside_observed_range(model):
+    """MC 기본 밴드는 관측 범위 안이어야 한다 — 편성 권고치를 외삽으로 부풀리지 않기 위함."""
+    assert stress.DEFAULT_MC_SHIFT_BAND == (-1.0, 0.0, 1.0)
+    assert stress.DEFAULT_MC_MULT_BAND == (0.8, 1.0, 1.2)
+    # 결정론 매트릭스는 그보다 넓게 훑어 worst case 를 담당한다
+    assert max(stress.DEFAULT_SHIFTS) > stress.DEFAULT_MC_SHIFT_BAND[2]
+    assert max(stress.DEFAULT_MULTS) > stress.DEFAULT_MC_MULT_BAND[2]
+
+
+def test_montecarlo_band_override_widens_distribution(model):
+    """밴드를 넓히면 P90 이 올라간다 — 밴드가 결과를 지배하는지 확인."""
+    narrow = stress.stress_montecarlo(10_000, model, n=20000)
+    wide = stress.stress_montecarlo(10_000, model, n=20000,
+                                    mult_band=(0.8, 1.0, 1.8),
+                                    shift_band=(-1.0, 0.0, 1.5))
+    assert wide["p90"] > narrow["p90"]
 
 
 def test_portfolio_diversifies_below_comonotonic_sum(model):

@@ -89,6 +89,8 @@ def main():
     payout_cv = float(cfg.get("payout_cv", 0.22))
     n_mc = int(cfg.get("montecarlo_n", 40000))
     base_per = model.per_applicant(0.0)
+    mc_shift = tuple(cfg.get("mc_shift_band", stress.DEFAULT_MC_SHIFT_BAND))
+    mc_mult = tuple(cfg.get("mc_mult_band", stress.DEFAULT_MC_MULT_BAND))
 
     per_round = {}
     for i, rnd in enumerate(fc.rounds):
@@ -97,7 +99,7 @@ def main():
             "base": base,
             "cells": stress.stress_matrix(base, model, None, mults, shifts),
             "mc": stress.stress_montecarlo(base, model, None, payout_cv,
-                                           shift_band=(min(shifts), 0.0, max(shifts)),
+                                           mult_band=mc_mult, shift_band=mc_shift,
                                            n=n_mc, seed=42 + i),
             "events": stress.event_scenarios(base, events),
         }
@@ -143,8 +145,11 @@ def main():
     for label, val, note in [
         ("기준셀 합", b_sum / EOK,
          f"신청 현 수준 유지 + 금액 구간 믹스 = 실측 {model.n_events}회차 고객 수 가중"),
-        ("MC P50", portfolio["p50"] / EOK, "배수·기울기 상방 비대칭이 반영된 중앙값"),
-        ("MC P90 (회차 독립)", portfolio["p90"] / EOK, "회차별 충격이 독립일 때 — 분산효과 최대, 하한"),
+        ("MC P50", portfolio["p50"] / EOK,
+         "밴드가 관측 범위로 대칭에 가까워 기준셀 근처에 놓인다"),
+        ("MC P90 (회차 독립)", portfolio["p90"] / EOK,
+         f"회차별 충격이 독립일 때 — 분산효과 최대, 하한. MC 밴드: 배수 "
+         f"{mc_mult[0]}~{mc_mult[2]} · θ {mc_shift[0]:+.1f}~{mc_shift[2]:+.1f}"),
         ("MC P90 (공통충격)", portfolio["comonotonic_p90"] / EOK,
          "모든 회차가 함께 움직일 때 — 상한. 연말 대량입금처럼 회차를 가로지르는 충격이 크면 이쪽"),
         ("worst case 합", w_sum / EOK,
@@ -370,13 +375,17 @@ def main():
     title(ws, "몬테카를로 — 신청배수·믹스시프트·지급률 결합 분포 (단위: 억원)")
     r = 3
     ws.cell(row=r, column=1,
-            value=f"방법: {n_mc:,}회 시뮬레이션. 신청배수 삼각(0.8/1.0/1.8), "
-                  f"믹스 기울기 삼각(θ={min(shifts):+.1f}/0/{max(shifts):+.1f}), "
+            value=f"방법: {n_mc:,}회 시뮬레이션. 신청배수 삼각"
+                  f"({mc_mult[0]}/{mc_mult[1]}/{mc_mult[2]}), 믹스 기울기 삼각"
+                  f"(θ={mc_shift[0]:+.1f}/{mc_shift[1]:+.1f}/{mc_shift[2]:+.1f}), "
                   f"지급률은 기울기에서 유도 후 잔여 잡음 CV {payout_cv}.")
     r += 1
     ws.cell(row=r, column=1,
-            value=f"기울기 밴드는 실측 관측 범위에서 왔고 최빈값은 {model.n_events}회차 고객 수 가중 통합(θ=0)이다 — "
-                  "임의 가정이 아니라 데이터가 눈금이다.")
+            value=f"밴드를 관측 범위로 제한했다 — 기울기 {mc_shift[0]:+.1f}~{mc_shift[2]:+.1f} "
+                  f"는 실측 회차 최저({model.tilt_lo_event})~최고({model.tilt_hi_event}) "
+                  f"그 자체이고 신청 배수는 {mc_mult[0]}~{mc_mult[2]}다. 관측 범위를 넘는 "
+                  f"극단(배수 {max(mults):.1f}·θ={max(shifts):+.1f})은 결정론 매트릭스의 "
+                  f"worst case 가 담당한다.")
     r += 2
     head(ws, r, ["회차", "기대값", "P50", "P90(편성 권고)", "P95", "P99"],
          width=[22, 14, 14, 18, 14, 14])

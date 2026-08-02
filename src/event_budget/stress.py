@@ -29,6 +29,10 @@ DEFAULT_MULTS = [0.8, 0.9, 1.0, 1.2, 1.5, 1.8]
 # 실측 관측 범위가 곧 눈금(theta=±1) + 범위 초과 스트레스(1.5)
 DEFAULT_SHIFTS = [-1.0, 0.0, 0.5, 1.0, 1.5]
 
+# 몬테카를로 밴드(lo, mode, hi) — 결정론 매트릭스와 달리 관측 범위 안으로 제한한다.
+DEFAULT_MC_MULT_BAND = (0.8, 1.0, 1.2)
+DEFAULT_MC_SHIFT_BAND = (-1.0, 0.0, 1.0)
+
 SHIFT_LABELS = {
     -1.0: "관측최저",
     0.0: "실측가중",
@@ -165,16 +169,19 @@ def _lognormal_noise(cv: float, n: int, rng) -> np.ndarray:
 
 def stress_montecarlo(base_applicants: float, model,
                       payout_rate: float | None = None, payout_cv: float = 0.22,
-                      mult_band: tuple[float, float, float] = (0.8, 1.0, 1.8),
-                      shift_band: tuple[float, float, float] = (-1.0, 0.0, 1.5),
+                      mult_band: tuple[float, float, float] = (0.8, 1.0, 1.2),
+                      shift_band: tuple[float, float, float] = (-1.0, 0.0, 1.0),
                       goal_band: tuple[float, float, float] = (1.0, 1.0, 1.0),
                       fixed_costs: float = 0.0,
                       n: int = 40000, seed: int = 42) -> dict:
     """신청 배수·믹스 시프트·지급률을 동시에 흔든 총예산 분포.
 
-    mult/shift/goal 은 삼각분포(lo, mode, hi). 기울기 밴드 기본값은 관측 최저(-1)에서
-    관측 범위를 5할 초과하는 상방(+1.5)까지이고 최빈값은 10회차 가중 통합(0)이다 —
-    임의 가정이 아니라 데이터가 눈금이다.
+    mult/shift/goal 은 삼각분포(lo, mode, hi).
+
+    기본 밴드는 '일어날 법한 범위'로 잡는다 — 기울기는 관측 최저(-1)~최고(+1)로 실측
+    범위 그 자체이고, 신청 배수는 0.8~1.2다. 관측 범위를 넘는 극단(기울기 +1.5,
+    배수 1.8)은 결정론 매트릭스의 worst case 셀이 담당한다. 편성 권고치(P90)를
+    외삽 구간까지 끌어올리면 상시 과대편성이 되므로 역할을 나눈 것이다.
 
     지급률은 실측 모델이면 시프트에서 유도한 뒤 잔여 불확실성만 곱셈 잡음으로 얹고,
     고정 지급률이면 Beta(평균, CV)로 흔든다.

@@ -186,7 +186,9 @@ def write_backtest_report(spec, markdown: str) -> str:
 def build_stress_report(spec, model, payout_rate: float, per_round: dict,
                         mults: list[float], shifts: list[float],
                         portfolio: dict | None = None, events: dict | None = None,
-                        legacy=None, spec_payout: float | None = None) -> str:
+                        legacy=None, spec_payout: float | None = None,
+                        mc_mult_band: tuple | None = None,
+                        mc_shift_band: tuple | None = None) -> str:
     """리워드 현행 유지 시 신청자수·수관금액구간 2축 스트레스 테스트 리포트.
 
     per_round: {회차: {"base": 기준신청자, "cells": [...], "mc": {...}, "events": [...]}}
@@ -333,11 +335,19 @@ def build_stress_report(spec, model, payout_rate: float, per_round: dict,
     # 5. 몬테카를로
     L.append("## 5. 몬테카를로 — 불확실성 결합")
     L.append("")
-    L.append(f"신청 배수(삼각 0.8/1.0/1.8) · 믹스 기울기(삼각 {shift_tick(min(shifts))}/"
-             f"θ=0/{shift_tick(max(shifts))}) · 지급률 잔여 잡음을 동시에 흔들어 총예산 "
-             f"분포를 얻는다. 기울기 밴드는 실측 관측 범위에서 왔고 최빈값은 "
-             f"{model.n_events}회차 고객 수 가중 통합이다 — 임의 가정이 아니라 "
-             f"데이터가 눈금이다.")
+    mb = mc_mult_band or (0.8, 1.0, 1.2)
+    sb = mc_shift_band or (-1.0, 0.0, 1.0)
+    L.append(f"신청 배수(삼각 {mb[0]}/{mb[1]}/{mb[2]}) · 믹스 기울기"
+             f"(삼각 {shift_tick(sb[0])}/{shift_tick(sb[1])}/{shift_tick(sb[2])}) · "
+             f"지급률 잔여 잡음을 동시에 흔들어 총예산 분포를 얻는다.")
+    L.append("")
+    L.append(f"> **밴드를 관측 범위로 제한했다.** 기울기 "
+             f"{shift_tick(sb[0])}~{shift_tick(sb[2])}는 실측 회차 최저"
+             f"({model.tilt_lo_event})~최고({model.tilt_hi_event}) 그 자체이고, "
+             f"신청 배수는 {mb[0]}~{mb[2]}다. 관측 범위를 넘는 극단"
+             f"(배수 {max(mults):.1f} · {shift_tick(max(shifts))})은 위 결정론 "
+             f"매트릭스의 worst case 셀이 담당한다. 편성 권고치(P90)를 외삽 구간까지 "
+             f"끌어올리면 상시 과대편성이 되므로 역할을 나눴다.")
     L.append("")
     L.append("| 회차 | 기대값 | P50 | P90(편성 권고) | P95 | P99 |")
     L.append("|---|---|---|---|---|---|")
