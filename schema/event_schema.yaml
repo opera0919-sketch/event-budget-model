@@ -1,0 +1,28 @@
+# 이벤트 명세(spec) 스키마 — events/*.yaml 이 따라야 하는 필드 정의(문서용)
+# 실제 검증은 src/event_budget/schema.py 가 수행한다.
+
+event_id:            "필수. 문자열. 리포트 파일명/식별자."
+title:               "필수. 문자열. 사람이 읽는 이벤트명."
+
+history_csv:         "필수. 실적+예측대상 회차가 담긴 CSV 경로(레포 루트 기준)."
+market_csv:          "선택. 시장 지표 CSV 경로. 없거나 비면 시장배수=1.0."
+
+forecast_rounds:     "필수. 예측할 회차 코드 리스트(예: [2026_03, 2026_04, 2027_01])."
+
+products:            "필수. 예측 대상 상품(이벤트) 리스트. 각 원소:"
+  name:              "  필수. 코드(영문). 예: pension, irp."
+  label:             "  필수. 표시명(한글)."
+  base_col_end:      "  필수. take-rate 분모가 되는 종료연월 고객수 컬럼명."
+  applicants_col:    "  필수. take-rate 분자가 되는 신청고객수 컬럼명."
+  avg_reward:        "  필수. 평균 리워드 금액(원/인). 시나리오 레버."
+  fixed_costs:       "  선택(기본 0). 제작·배송 등 고정비(원)."
+  tax_rate:          "  선택(기본 0.0). 제세공과금율. 현금성 0.0, 경품 0.22."
+
+levers:              "선택. 없으면 params/benchmarks.yaml 기본값 사용."
+  goal_achievement:  "  목표 달성률 시나리오 값 리스트 [보수, 기준, 낙관]."
+  reward_payout_rate:"  리워드 지급률 시나리오 값 리스트 [보수, 기준, 낙관]."
+
+# history_csv 필수 컬럼:
+#   round, season(1~4), 그리고 각 product 의 base_col_end / applicants_col.
+#   예측대상 회차는 base_col_end/applicants_col 이 공란이어야 한다(모델이 채움).
+#   기준 고객수 투영을 위해 실적 회차의 base_col_end 시계열이 필요하다.

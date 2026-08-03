@@ -1,0 +1,47 @@
+# 타사이전금액 구간별 리워드 테이블(현재안)
+#
+# 두 가지 규칙이 겹쳐 있다.
+#   규칙1 (실적 인정): 타사이전금액 >= credit_threshold 이면
+#                      인정실적 = 타사이전금액 × credit_multiplier.
+#                      (예: 2,000만원 입금 → 3,000만원 인정 → 6만원 지급)
+#   규칙2 (제세금):    리워드 >= tax_threshold 이면
+#                      예산반영액 = 리워드 + (리워드/(1-tax_rate))×tax_rate = 리워드/(1-tax_rate).
+#                      tax_threshold 미만은 제세 미반영(리워드 그대로).
+#
+# tiers 의 lower/upper 는 '인정실적' 기준 경계다. 당첨자 금액분포는 '실제 이전금액' 축에서
+# 정의되므로, tiers.py 가 규칙1을 역으로 적용해 실제금액 경계로 환산한 뒤 적분한다.
+
+pension_transfer_2026:
+  label: 연금저축 타사이전 리워드(현재안)
+
+  credit_threshold: 10000000     # 1천만원 이상부터 배수 인정
+  credit_multiplier: 1.5
+
+  tax_threshold: 50000           # 리워드 5만원 이상이면 제세 gross-up
+  tax_rate: 0.22
+
+  tiers:
+    - {label: "5백만~1천만", lower: 5000000,   upper: 10000000,  reward: 20000}
+    - {label: "1천만~3천만", lower: 10000000,  upper: 30000000,  reward: 40000}
+    - {label: "3천만~5천만", lower: 30000000,  upper: 50000000,  reward: 60000}
+    - {label: "5천만~1억",   lower: 50000000,  upper: 100000000, reward: 150000}
+    - {label: "1억~2억",     lower: 100000000, upper: 200000000, reward: 300000}
+    - {label: "2억~3억",     lower: 200000000, upper: 300000000, reward: 600000}
+    - {label: "3억 이상",    lower: 300000000, upper: null,      reward: 1000000}
+
+  # 타사수관금액 구간별 고객 수 — 실측(10회차, 총 신청 10만명). 이것이 기본 분포다.
+  # 구간 안쪽은 로그축 균등으로 보간한다. 1.5배 인정 규칙 때문에 리워드 구간 경계가
+  # 실측 구간 안쪽(예: 실제 2,000만원)에 떨어져 구간을 쪼개 적분해야 하기 때문.
+  amount_distribution:
+    source: data/transfer_amount_distribution.csv
+    weighted: true         # 고객 수 가중(회차 규모가 4천~2만명으로 5배 차이)
+    min_amount: 100000     # 최저 구간 [0, 5백만) 하한 대체값 — 로그축 보간용 가정
+    max_amount: 1000000000 # 최상위 열린 구간 [3억, ∞) 상한 대체값(실측 24명 분포)
+
+  # (참고·비교용) 실측 분포 이전에 쓰던 로그정규 가정. 실적 2개 지표로 mu·sigma 역산.
+  #   (a) P(이전금액 >= 최저구간 하한) = anchor_condition_rate
+  #   (b) 평균 예산반영 단가          = anchor_avg_budget_cost
+  # 실측 분포로 치환한 뒤에는 대조군으로만 쓴다(tiers.load_tier_model).
+  deposit_dist:
+    anchor_condition_rate: 0.51      # 조건충족률(당첨/순입금) 최근 실측
+    anchor_avg_budget_cost: 127665   # 당첨 1인당 예산반영 단가(원) 최근 실측
