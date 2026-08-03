@@ -77,39 +77,42 @@ def test_holdout_2026_02_base_projection_is_sound_for_both():
     assert abs(irp["tr_pred"] - irp["tr_actual"]) / irp["tr_actual"] > 0.20
 
 
-def test_budget_model_has_upward_bias_against_actuals():
-    """구간모델 예산은 실측 집행예산보다 체계적으로 높다(LOO 편향 +40% 이상)."""
+def test_holdout_1607_unit_cost_matches_actual():
+    """유효 검증 표본 — 현재 지급 조건으로 종료된 1607 에서 단가가 ±10% 안으로 맞는다.
+
+    1607 이전 회차는 리워드 지급 조건이 달라 구간모델 검증에 쓸 수 없다
+    (data/reference_deposit_events.csv 주석 참조). 그래서 표본은 이 한 건뿐이다.
+    """
     cfg = tiers.load_tier_table(KEY)
     rows, ref = _pairs()
-    errs = []
-    for i, rr in enumerate(ref):
-        m = _model(cfg, [r for j, r in enumerate(rows) if j != i])
-        act = float(rr["budget_eok"]) * 1e8
-        errs.append((float(rr["applicants"]) * m.per_applicant() - act) / act)
-    assert st.mean(errs) > 0.40
-    assert sum(1 for e in errs if e > 0) >= 8, "대부분의 회차에서 과대예측"
+    i = next(i for i, r in enumerate(rows) if r["event_no"] == "1607")
+    m = _model(cfg, [r for j, r in enumerate(rows) if j != i])   # 1607 제외 학습
+    actual_pa = float(ref[i]["budget_eok"]) * 1e8 / float(ref[i]["applicants"])
+    assert abs(m.per_applicant() - actual_pa) / actual_pa < 0.10
+
+
+def test_pre_1607_rounds_are_not_used_for_calibration():
+    """조건 변경 전 회차는 현재 구간표와 수준이 다르다 — 보정계수로 쓰면 안 된다."""
+    cfg = tiers.load_tier_table(KEY)
+    rows, ref = _pairs()
+    i = next(i for i, r in enumerate(rows) if r["event_no"] == "1607")
+    ratio = [float(rr["budget_eok"]) * 1e8 / float(rr["applicants"])
+             / _model(cfg, [r]).per_applicant() for r, rr in zip(rows, ref)]
+    assert ratio[i] > max(ratio[:i] + ratio[i + 1:]), \
+        "현재 조건 회차가 가장 높아야 한다 — 이전 회차 수준으로 보정하면 과소편성된다"
 
 
 def test_own_distribution_explains_actual_unit_cost():
-    """회차 자체 분포는 실측 단가와 강하게 상관한다 — 계산식이 아니라 예측이 문제."""
+    """자체 분포로 계산한 단가는 실측과 강하게 상관한다.
+
+    지급 조건이 달랐던 회차까지 포함해도 방향은 같다 — 분포→예산 계산 구조가
+    틀리지 않았다는 약한 방증. 수준(level)까지 맞을 이유는 없다.
+    """
     cfg = tiers.load_tier_table(KEY)
     rows, ref = _pairs()
     own = [_model(cfg, [r]).per_applicant() for r in rows]
     act = [float(rr["budget_eok"]) * 1e8 / float(rr["applicants"]) for rr in ref]
     assert st.correlation(own, act) > 0.85
-
-
-def test_calibration_factor_is_stable_near_0_70():
-    """실측/모델 비율이 회차별로 안정적이라 단일 계수 보정이 성립한다."""
-    cfg = tiers.load_tier_table(KEY)
-    rows, ref = _pairs()
-    ratios = [float(rr["budget_eok"]) * 1e8 / float(rr["applicants"])
-              / _model(cfg, [r]).per_applicant()
-              for r, rr in zip(rows, ref)]
-    assert 0.65 < st.mean(ratios) < 0.75
-    assert st.stdev(ratios) / st.mean(ratios) < 0.20
-    # 제세 gross-up 제거(×0.78)만으로는 설명되지 않는다
-    assert st.mean(ratios) < 0.78 - 0.03
 
 
 def test_applicant_populations_agree_across_sources():

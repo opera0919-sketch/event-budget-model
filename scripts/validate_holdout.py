@@ -208,9 +208,18 @@ def track_c(out: list[str], cfg: dict, rows: list[dict], ref: list[dict]) -> dic
     k = sum(actual) / sum(own)
     ratios = [a / o for a, o in zip(actual, own)]
 
-    out.append("## C. 예산 모델 전체 백테스트\n")
-    out.append("1607 한 건만으로는 운이 섞인다. 10회차 전부를 대상으로 두 방식으로 돌렸다 —"
-               " Leave-One-Out(해당 회차만 빼고 학습)과 순차(선행 회차만 학습).\n")
+    out.append("## C. 예산 모델 전체 백테스트 — **성립하지 않는다**\n")
+    out.append(f"> ⛔ **{TARGET_EVENT} 이전 회차는 리워드 지급 조건 자체가 달랐다.**"
+               f" 현재 구간표(`params/reward_tiers.yaml`)가 적용된 것은"
+               f" {TARGET_EVENT}(2026-05~07)부터이므로, 그 이전 회차의 `budget_eok` 로"
+               " 구간모델을 검증하거나 보정계수를 뽑는 것은 **다른 상품의 가격표로"
+               " 채점하는 것과 같다**. 아래 표는 그 사실을 확인하려고 남겨 둔 것이지"
+               " 모델 오차의 측정치가 아니다.\n")
+    out.append("그래서 구간모델의 유효 검증 표본은 현재 조건 아래 종료된"
+               f" {TARGET_EVENT} 한 건뿐이고, 그 결과는 B 에 있다 — 신청 1인당"
+               " 예측 43,065원 vs 실측 44,810원, **-3.9%**.\n")
+    out.append("아래는 참고용 대조다. Leave-One-Out(해당 회차만 빼고 학습)과"
+               " 순차(선행 회차만 학습) 두 방식으로 돌렸다.\n")
     out.append("| 이벤트 | 기간 | 신청 | 실측 | 예측(LOO) | 오차 | 실측 1인당 | 예측 1인당 |")
     out.append("|---|---|---:|---:|---:|---:|---:|---:|")
     for r in loo:
@@ -235,39 +244,20 @@ def track_c(out: list[str], cfg: dict, rows: list[dict], ref: list[dict]) -> dic
     out.append(f"실측 신청 1인당 예산은 {pa_lo:,.0f}~{pa_hi:,.0f}원으로 ×{pa_hi/pa_lo:.1f} 흔들리는데,"
                f" 모델 예측은 {pp_lo:,.0f}~{pp_hi:,.0f}원(폭 {(pp_hi/pp_lo-1)*100:.0f}%)으로 거의 평평하다."
                " 회차 간 변동을 사실상 설명하지 못한다.\n")
-    out.append(f"다만 **회차의 자체 분포를 주면 잘 맞는다** — 자체 분포로 계산한 1인당 예산과"
-               f" 실측의 상관은 r={corr:.3f} 다. 즉 분포→예산 계산식은 옳고,"
-               " 문제는 **다음 회차의 분포를 선행 회차로 예측할 수 없다**는 데 있다.\n")
-    out.append("### 수준(level) 편의와 보정계수\n")
-    out.append(f"실측 ÷ 자체분포 모델 비율은 회차별 {min(ratios):.3f}~{max(ratios):.3f},"
-               f" 평균 **{st.mean(ratios):.3f}** ± {st.stdev(ratios):.3f}"
-               f" (CV {st.stdev(ratios)/st.mean(ratios)*100:.0f}%)."
-               f" 예산가중 보정계수는 k = {k:.3f} 다. 비율이 회차별로 꽤 안정적이라"
-               " 단일 계수 보정이 통한다.\n")
-    out.append("| 보정 | LOO MAPE | LOO 편향 |")
-    out.append("|---|---:|---:|")
-    for kk, name in ((1.0, "없음(현재 모델)"), (k, f"×{k:.3f}"), (0.78, "제세 제외 ×0.78")):
-        errs = [(r["pred"] * kk - r["act"]) / r["act"] for r in loo]
-        out.append(f"| {name} | {st.mean([abs(e) for e in errs])*100:.1f}% "
-                   f"| {st.mean(errs)*100:+.1f}% |")
-    out.append("")
-    out.append(f"제세 gross-up 을 빼는 것(×0.78)만으로는 편의가 다 지워지지 않는다."
-               f" 남는 ×{k/0.78:.2f} 는 리워드 대상(수관 5백만원 이상)으로 잡힌 고객 중"
-               " 실제로는 지급되지 않은 몫으로 보인다. 두 해석 모두"
-               " `data/reference_deposit_events.csv` 의 `budget_eok` 가 무엇을 담는지"
-               " (세전 지급액인지 제세 포함 소요예산인지) 확인해야 확정된다.\n")
+    out.append(f"자체 분포로 계산한 1인당 예산과 실측의 상관은 r={corr:.3f} 로 높다."
+               " 조건이 달랐던 회차에서도 '금액이 크게 들어온 회차일수록 예산이 컸다'는"
+               " 방향은 같았다는 뜻이고, 분포→예산 계산 구조 자체가 틀리지 않았다는"
+               " 약한 방증은 된다. 수준(level)까지 맞을 이유는 없다 — 지급 조건이 달랐으니까.\n")
 
-    tgt = next(r for r in loo if r["ev"] == TARGET_EVENT)
-    rank = sorted(ratios, reverse=True).index(ratios[[r["ev"] for r in loo].index(TARGET_EVENT)]) + 1
-    out.append(f"> ⚠️ **이 편의는 {TARGET_EVENT} 만 놓고 보면 나타나지 않는다.**"
-               f" {TARGET_EVENT} 은 종료 후 확정치(신청 {tgt['app']:,.0f}명 /"
-               f" 리워드 {tgt['act']/1e8:.2f}억)를 직접 받은 유일한 회차인데,"
-               f" 실측/모델 비율이 {ratios[[r['ev'] for r in loo].index(TARGET_EVENT)]:.3f} 로"
-               f" 10회차 중 {rank}위이고 LOO 오차도 {tgt['err']*100:+.0f}% 로 가장 작다."
-               " 나머지 9회차의 `budget_eok` 가 같은 기준의 확정치인지"
-               " (진행중 스냅샷이거나 제세 제외 금액은 아닌지) 확인이 필요하다."
-               " 만약 9회차 값이 확정·동일기준이라면 편의는 실재하고, 아니라면 편의의 상당 부분은"
-               " 데이터 정의 차이일 수 있다.\n")
+    i = [r["ev"] for r in loo].index(TARGET_EVENT)
+    tgt = loo[i]
+    out.append(f"실제로 {TARGET_EVENT} 은 실측/모델 비율 {ratios[i]:.3f} 로 10회차 중 가장 높고"
+               f" LOO 오차 {tgt['err']*100:+.0f}% 로 가장 작다."
+               f" 나머지 9회차의 비율({min(ratios[:i] + ratios[i+1:]):.3f}~"
+               f"{max(ratios[:i] + ratios[i+1:]):.3f})이 낮은 것은"
+               " 모델 편의가 아니라 **당시 지급 조건이 지금보다 덜 후했기 때문**으로 읽어야 한다."
+               " 앞선 판(2026-08-03 이전)에서 제시했던 보정계수 k≈0.70 은"
+               " 조건이 다른 회차로 뽑은 값이므로 **적용하지 않는다**.\n")
     return {"k": k, "corr": corr, "loo": loo}
 
 
@@ -283,27 +273,29 @@ def track_d(out: list[str], k: float, ref: list[dict]) -> None:
     model = tiers.load_empirical_tier_model(p.reward_tier_key, p.reward_tiers_path)
     pa = model.per_applicant()
 
-    out.append("## D. 스트레스 리포트 기준셀에 대한 함의\n")
-    out.append(f"현재 기준셀은 `예측 신청자 × {pa:,.0f}원`이다. C 의 보정계수 k={k:.3f} 를"
-               " 곱하면 이렇게 바뀐다.\n")
-    out.append("| 회차 | 예측 신청자 | 현재 기준셀 | k 보정 |")
-    out.append("|---|---:|---:|---:|")
-    tot = totk = 0.0
+    out.append("## D. 스트레스 리포트 기준셀에 대한 함의 — **보정하지 않는다**\n")
+    out.append(f"현재 기준셀은 `예측 신청자 × {pa:,.0f}원` 그대로 둔다."
+               " C 에서 보정계수를 뽑을 수 있는 것처럼 보이지만, 그 계수는 지급 조건이"
+               f" 달랐던 {TARGET_EVENT} 이전 회차에서 나온 값이라 현재 구간표에 적용할 근거가 없다.\n")
+    out.append("| 회차 | 예측 신청자 | 기준셀 |")
+    out.append("|---|---:|---:|")
+    tot = 0.0
     for rnd in spec.forecast_rounds:
         a = fc.applicants[rnd][1]
         tot += a * pa
-        totk += a * pa * k
-        out.append(f"| {rnd} | {a:,.0f} | {a*pa/1e8:.2f}억 | {a*pa*k/1e8:.2f}억 |")
-    out.append(f"| **합계** | | **{tot/1e8:.2f}억** | **{totk/1e8:.2f}억** |")
+        out.append(f"| {rnd} | {a:,.0f} | {a*pa/1e8:.2f}억 |")
+    out.append(f"| **합계** | | **{tot/1e8:.2f}억** |")
     out.append("")
 
-    recent = [r for r in ref if r["period"].startswith(("2026-01", "2026-05"))]
-    obs = " / ".join(f"{r['period']} {float(r['budget_eok']):.2f}억" for r in recent)
-    first = fc.applicants[spec.forecast_rounds[0]][1] * pa
-    out.append(f"보정 후 3개월 회차 예산은 최근 3개월 이벤트 실측({obs})과 같은 자리에 놓인다."
-               f" 보정 전 {first/1e8:.2f}억은 그 실측보다 15~45% 높다."
-               " 다만 C 의 경고대로 k 자체가 9회차 `budget_eok` 의 정의에 달려 있으므로,"
-               " 이 보정은 그 확인 전까지 참고치로만 봐야 한다.\n")
+    ev = next(r for r in ref if r["period"].startswith("2026-05"))
+    out.append(f"현재 조건으로 종료된 유일한 회차 {TARGET_EVENT} 은 3개월간"
+               f" 신청 {float(ev['applicants']):,.0f}명 / 리워드"
+               f" {float(ev['budget_eok']):.2f}억이었다. 같은 3개월 길이인 예측 회차의"
+               f" 기준셀({tot/len(spec.forecast_rounds)/1e8:.1f}억 내외)은 신청자 예측이"
+               " 그보다 큰 만큼 높게 나오며, 단가 자체는 실측과 -3.9% 로 맞는다.\n")
+    out.append("> ⚠️ 유효 검증 표본이 1회차뿐이다. 단가가 맞은 것을 '모델이 검증됐다'로"
+               " 읽기에는 근거가 얇으므로, 다음 회차가 끝나는 대로 같은 홀드아웃을 다시 돌려"
+               " 표본을 늘려야 한다.\n")
     out.append("### 신청자 모집단 정합\n")
     hist_app = next(r for r in history if r["round"] == TARGET_ROUND)[p.applicants_col]
     ev = next(r for r in ref if r["period"].startswith("2026-05"))
