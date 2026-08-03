@@ -40,7 +40,7 @@ pytest tests/
 - **백테스트**(#7): `backtest` 명령으로 MAPE·편향·밴드 커버리지 측정 → `min_cv` 등 보정.
 - **지급 퍼널형 예산**: 순입금·조건충족 전원지급 이벤트는 명세에 `conversion_rate`(전환율)·
   `condition_rate`(조건충족률)를 지정하면 `예산 = 신청 × 전환율 × 조건충족률 × 리워드`로 계산.
-  실적 보정값은 `data/reference_deposit_events.csv`(10회차) 참조 — 전환율 62%·조건충족 44%.
+  실적 보정값은 `data/reference_deposit_events.csv`(10회차) 참조 — 전환율 62%·조건충족 45%.
 
 ## 스트레스 테스트 (리워드 현행 유지 시)
 

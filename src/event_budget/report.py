@@ -384,7 +384,7 @@ def build_stress_report(spec, model, payout_rate: float, per_round: dict,
              "연말효과를 이중으로 계상하지 않도록 주의한다.")
     L.append("5. 분포의 모집단이 '신청 고객'임은 교차 검증됐다 — 회차별 총 고객 수가 "
              "`data/reference_deposit_events.csv`의 신청자수와 10건 중 9건 정확히 일치한다"
-             "(1607만 진행 경과로 16,356 → 17,399 갱신). 따라서 지급률 19.91%는 "
+             "(1607만 종료 직전 스냅샷 17,399 — 확정치 17,496 대비 -0.6%). 따라서 지급률 19.91%는 "
              "리워드 지급고객 ÷ 신청고객이다.")
     L.append("")
     return "\n".join(L)

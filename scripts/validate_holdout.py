@@ -64,50 +64,78 @@ def track_a(out: list[str]) -> dict:
             "tr_pred": fc.take_rate[TARGET_ROUND][1], "tr_actual": actual / actual_base,
         }
 
-    # take-rate 오차 분해(연금저축)
-    p = spec.products[0]
-    trunc = backtest._blank_from(history, p, idx)
+    # take-rate 블렌드 구성 — 상품별로 어떤 재료가 들어갔는지
     exclude = set(raw.get("exclude_rounds", []))
-    seas = demand.season_take_rates(trunc, p.base_col_end, p.applicants_col, exclude)
-    recent = demand.recent_take_rate(trunc, p.base_col_end, p.applicants_col,
-                                     exclude, int(raw.get("recent_window", 4)))
-    s2 = [v for _, v in seas.get(row["season"], [])]
-    res["_decomp"] = {"season_obs": s2, "season_mean": st.mean(s2), "recent": recent,
-                      "blend_w": float(raw.get("blend_recent_weight", 0.5))}
+    for p in spec.products:
+        trunc = backtest._blank_from(history, p, idx)
+        seas = demand.season_take_rates(trunc, p.base_col_end, p.applicants_col, exclude)
+        obs = [v for _, v in seas.get(row["season"], [])]
+        res[p.name]["decomp"] = {
+            "season_obs": obs,
+            "season_mean": st.mean(obs) if obs else None,
+            "recent": demand.recent_take_rate(trunc, p.base_col_end, p.applicants_col,
+                                              exclude, int(raw.get("recent_window", 4))),
+            "blend_w": float(raw.get("blend_recent_weight", 0.5)),
+        }
 
-    out.append("## A. 신청 고객 수 — 2026_02(202605~202607) 홀드아웃\n")
-    out.append("2026_02 이후 행의 기준고객수·신청자를 모두 가리고, take-rate 보정까지"
+    out.append(f"## A. 신청 고객 수 — {TARGET_ROUND}(202605~202607) 홀드아웃\n")
+    out.append(f"{TARGET_ROUND} 이후 행의 기준고객수·신청자를 모두 가리고, take-rate 보정까지"
                " 절단된 이력으로만 다시 계산했다.\n")
     out.append("| 상품 | 예측(기준) | 밴드 | 실측 | 오차 | 밴드내 |")
     out.append("|---|---:|---|---:|---:|:--:|")
-    for k in ("pension", "irp"):
-        r = res[k]
+    for p in spec.products:
+        r = res[p.name]
         out.append(f"| {r['label']} | {r['pred']:,.0f} | {r['cons']:,.0f} ~ {r['opt']:,.0f} "
                    f"| {r['actual']:,.0f} | {r['err']*100:+.1f}% "
                    f"| {'O' if r['in_band'] else '**X**'} |")
     out.append("")
-    out.append("오차가 어디서 났는지는 두 단계로 갈라진다.\n")
-    out.append("| 단계 | 연금저축 예측 | 실측 | 오차 |")
-    out.append("|---|---:|---:|---:|")
-    r = res["pension"]
-    out.append(f"| Stage1 기준고객수 | {r['base_pred']:,.0f} | {r['base_actual']:,.0f} "
-               f"| {r['base_err']*100:+.1f}% |")
-    out.append(f"| Stage2 take-rate | {r['tr_pred']*100:.3f}% | {r['tr_actual']*100:.3f}% "
-               f"| {(r['tr_pred']-r['tr_actual'])/r['tr_actual']*100:+.1f}% |")
-    d = res["_decomp"]
+    out.append("두 상품의 결과가 갈린다. 어느 단계에서 갈렸는지 보면 이렇다.\n")
+    out.append("| 상품 | Stage1 기준고객수 | 오차 | Stage2 take-rate | 오차 |")
+    out.append("|---|---:|---:|---:|---:|")
+    for p in spec.products:
+        r = res[p.name]
+        out.append(f"| {r['label']} | {r['base_pred']:,.0f} → {r['base_actual']:,.0f} "
+                   f"| {r['base_err']*100:+.1f}% "
+                   f"| {r['tr_pred']*100:.3f}% → {r['tr_actual']*100:.3f}% "
+                   f"| {(r['tr_pred']-r['tr_actual'])/r['tr_actual']*100:+.1f}% |")
     out.append("")
-    out.append(f"기준고객수는 {r['base_err']*100:+.1f}%로 사실상 맞혔고, 오차는 전부"
-               " take-rate 에서 나왔다. 블렌드 구성은 이렇다.\n")
-    out.append(f"- 시즌2 관측: {', '.join(f'{v*100:.3f}%' for v in d['season_obs'])}"
-               f" → 평균 {d['season_mean']*100:.3f}% (관측 {len(d['season_obs'])}건)")
-    out.append(f"- 최근추세: {d['recent']*100:.3f}%")
-    out.append(f"- 블렌드({d['blend_w']:.1f}/{1-d['blend_w']:.1f}): {r['tr_pred']*100:.3f}%"
-               f" ← 실측 {r['tr_actual']*100:.3f}%")
+    out.append("기준고객수 투영은 두 상품 모두 3% 안으로 맞았다. 차이는 전부 take-rate 에서"
+               " 나며, 블렌드 재료를 펼치면 원인이 드러난다.\n")
+    out.append("| 상품 | 시즌2 관측 | 시즌평균 | 최근추세 | 블렌드(예측) | 실측 |")
+    out.append("|---|---|---:|---:|---:|---:|")
+    for p in spec.products:
+        r, d = res[p.name], res[p.name]["decomp"]
+        obs = ", ".join(f"{v*100:.3f}%" for v in d["season_obs"]) or "없음"
+        out.append(f"| {r['label']} | {obs} ({len(d['season_obs'])}건) "
+                   f"| {d['season_mean']*100:.3f}% | {d['recent']*100:.3f}% "
+                   f"| {r['tr_pred']*100:.3f}% | {r['tr_actual']*100:.3f}% |")
     out.append("")
-    out.append(f"take-rate 는 2025_02 {d['season_obs'][0]*100:.3f}% 이후 계속 오르는 중인데,"
-               " 시즌2 관측이 그 한 건뿐이라 블렌드가 옛 낮은 값을 절반 가중으로 끌어온다."
-               f" 최근추세만 썼다면 {d['recent']*100:.3f}%,"
-               f" 오차는 {(d['recent']-r['tr_actual'])/r['tr_actual']*100:+.1f}%로 줄었다.\n")
+    for p in spec.products:
+        r, d = res[p.name], res[p.name]["decomp"]
+        alt = (d["recent"] - r["tr_actual"]) / r["tr_actual"]
+        cur = (r["tr_pred"] - r["tr_actual"]) / r["tr_actual"]
+        if abs(cur) > 0.15 and abs(alt) > 0.15:
+            note = "재료가 둘 다 실측에서 같은 방향으로 멀어 무엇을 섞어도 못 맞힌다"
+        elif abs(alt) > abs(cur):
+            note = "시즌평균과 최근추세를 반반 섞은 것이 주효했다"
+        else:
+            note = "시즌평균을 섞은 쪽이 오차를 키웠다"
+        out.append(f"- **{r['label']}**: 블렌드 {cur*100:+.1f}% vs 최근추세만"
+                   f" {alt*100:+.1f}% (시즌평균 {d['season_mean']*100:.3f}% ·"
+                   f" 최근추세 {d['recent']*100:.3f}%) — {note}.")
+    out.append("")
+    out.append("시즌2 관측이 상품마다 한 건뿐이라 이 블렌드는 표본 1개에 절반 가중을 준다."
+               " 연금저축이 맞은 것은 구조가 옳아서라기보다 그 한 건이 마침 맞는 자리에"
+               " 있었기 때문으로 봐야 한다 — 같은 구조에서 IRP 는 밴드를 벗어났다.")
+    irp = res["irp"]
+    hist = [r[spec.products[1].applicants_col] / r[spec.products[1].base_col_end]
+            for r in history[:idx]
+            if r.get(spec.products[1].applicants_col) and r.get(spec.products[1].base_col_end)]
+    out.append(f"IRP 의 take-rate 는 직전 실적만 봐도 {min(hist)*100:.3f}~{max(hist)*100:.3f}%"
+               f" (×{max(hist)/min(hist):.1f}) 로 튄다. 실측 {irp['tr_actual']*100:.3f}% 는"
+               " 그 범위 안이지만 블렌드가 만들어내는 좁은 예측치로는 닿지 않는다."
+               f" 현재 밴드(±CV)가 ±{(irp['opt']/irp['pred']-1)*100:.0f}% 인데 실제 변동은"
+               " 그보다 훨씬 크다 — 밴드 폭이 부족한 것이 근본 원인이다.\n")
     return res
 
 
@@ -135,12 +163,13 @@ def track_b(out: list[str], cfg: dict, rows: list[dict], ref: list[dict]) -> dic
                    f"| {m.per_applicant():,.0f}원 |")
     out.append(f"| **실제 집행예산 ÷ 신청** | — | — | **{budget/app:,.0f}원** |")
     out.append("")
-    out.append(f"예측 {m_pred.per_applicant():,.0f}원은 1607 자체 분포가 시사하는"
-               f" {m_act.per_applicant():,.0f}원보다"
-               f" {(m_pred.per_applicant()-m_act.per_applicant())/m_act.per_applicant()*100:+.1f}%"
-               f" 낮지만, 정작 실제 집행예산 기준 {budget/app:,.0f}원과는"
+    out.append(f"예측 {m_pred.per_applicant():,.0f}원은 실제 집행예산 기준"
+               f" {budget/app:,.0f}원과"
                f" {(m_pred.per_applicant()-budget/app)/(budget/app)*100:+.1f}% 로 붙는다."
-               " 아래 C 에서 보듯 이 근접은 모델의 실력이 아니라 두 오차가 상쇄된 결과다.\n")
+               f" 반면 1607 **자체** 분포로 계산하면 {m_act.per_applicant():,.0f}원"
+               f"({(m_act.per_applicant()-budget/app)/(budget/app)*100:+.1f}%)이 나와"
+               " 오히려 더 벗어난다 — 자체 분포를 알아도 예산이 그만큼 나오지는 않는다는 뜻이고,"
+               " 아래 C 의 수준 편의와 같은 현상이다.\n")
     out.append("구간별 대상자 비중은 잘 맞는다 — 회차 간 믹스 자체는 안정적이다.\n")
     out.append("| 구간 | 예측(9회차) | 실측(1607) | 차 |")
     out.append("|---|---:|---:|---:|")
@@ -227,6 +256,18 @@ def track_c(out: list[str], cfg: dict, rows: list[dict], ref: list[dict]) -> dic
                " 실제로는 지급되지 않은 몫으로 보인다. 두 해석 모두"
                " `data/reference_deposit_events.csv` 의 `budget_eok` 가 무엇을 담는지"
                " (세전 지급액인지 제세 포함 소요예산인지) 확인해야 확정된다.\n")
+
+    tgt = next(r for r in loo if r["ev"] == TARGET_EVENT)
+    rank = sorted(ratios, reverse=True).index(ratios[[r["ev"] for r in loo].index(TARGET_EVENT)]) + 1
+    out.append(f"> ⚠️ **이 편의는 {TARGET_EVENT} 만 놓고 보면 나타나지 않는다.**"
+               f" {TARGET_EVENT} 은 종료 후 확정치(신청 {tgt['app']:,.0f}명 /"
+               f" 리워드 {tgt['act']/1e8:.2f}억)를 직접 받은 유일한 회차인데,"
+               f" 실측/모델 비율이 {ratios[[r['ev'] for r in loo].index(TARGET_EVENT)]:.3f} 로"
+               f" 10회차 중 {rank}위이고 LOO 오차도 {tgt['err']*100:+.0f}% 로 가장 작다."
+               " 나머지 9회차의 `budget_eok` 가 같은 기준의 확정치인지"
+               " (진행중 스냅샷이거나 제세 제외 금액은 아닌지) 확인이 필요하다."
+               " 만약 9회차 값이 확정·동일기준이라면 편의는 실재하고, 아니라면 편의의 상당 부분은"
+               " 데이터 정의 차이일 수 있다.\n")
     return {"k": k, "corr": corr, "loo": loo}
 
 
@@ -258,15 +299,23 @@ def track_d(out: list[str], k: float, ref: list[dict]) -> None:
 
     recent = [r for r in ref if r["period"].startswith(("2026-01", "2026-05"))]
     obs = " / ".join(f"{r['period']} {float(r['budget_eok']):.2f}억" for r in recent)
+    first = fc.applicants[spec.forecast_rounds[0]][1] * pa
     out.append(f"보정 후 3개월 회차 예산은 최근 3개월 이벤트 실측({obs})과 같은 자리에 놓인다."
-               " 보정 전 9.38억은 최근 실측보다 40~50% 높았다.\n")
-    out.append("### 신청자 모집단 불일치\n")
-    out.append("기준셀은 `history.csv` 의 신청자(연금저축 이벤트 신청)와 이벤트 실적 파일의"
-               " 신청자를 섞어 쓴다. 기간이 정확히 겹치는 2026_02/1607 에서 두 값은"
-               f" 23,408 vs 16,356 (비율 0.699) 로 다르다."
-               " 공교롭게 A 의 신청자 과소예측(-25.9%)과 방향이 반대라 곱은 거의 1.0 이 되어"
-               " 위 표의 결론은 바뀌지 않지만, 두 오차가 서로를 가리고 있다는 뜻이므로"
-               " 어느 한쪽만 고치면 결과가 크게 틀어진다.\n")
+               f" 보정 전 {first/1e8:.2f}억은 그 실측보다 15~45% 높다."
+               " 다만 C 의 경고대로 k 자체가 9회차 `budget_eok` 의 정의에 달려 있으므로,"
+               " 이 보정은 그 확인 전까지 참고치로만 봐야 한다.\n")
+    out.append("### 신청자 모집단 정합\n")
+    hist_app = next(r for r in history if r["round"] == TARGET_ROUND)[p.applicants_col]
+    ev = next(r for r in ref if r["period"].startswith("2026-05"))
+    dist_app = next(r for r in tiers.load_amount_distribution()
+                    if r["event_no"] == TARGET_EVENT)["applicants"]
+    out.append("기준셀은 `history.csv` 의 신청자와 이벤트 실적 파일의 신청자를 곱셈으로 섞어 쓴다."
+               " 두 계열이 같은 것을 세는지 확인이 필요한데, 기간이 정확히 겹치는"
+               f" {TARGET_ROUND}/{TARGET_EVENT} 에서"
+               f" history {hist_app:,.0f}명 · 실적 {float(ev['applicants']):,.0f}명 ·"
+               f" 금액분포 {dist_app:,.0f}명으로"
+               f" 최대 {abs(dist_app-hist_app)/hist_app*100:.1f}% 차이에 그친다"
+               " (금액분포는 종료 직전 스냅샷). 같은 모집단으로 보고 곱해도 무방하다.\n")
 
 
 def main() -> None:

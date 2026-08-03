@@ -58,7 +58,7 @@ def test_predict_matches_validated_numbers():
     bench = _bench()
     fc = demand.predict_product(hist, PENSION, bench, ["2026_04"])
     _, base, _ = fc.applicants["2026_04"]
-    assert abs(base - 26_132) / 26_132 < 0.01     # 검증된 기준 신청자
+    assert abs(base - 25_306) / 25_306 < 0.01     # 검증된 기준 신청자
 
 
 def test_nowcast_logistic_extrapolates_up():

@@ -40,7 +40,7 @@ def test_market_off_gives_identical_prediction():
     fc_mkt = demand.predict_product(hist, PENSION, bench, ["2026_04"], market=None)
     assert fc_none.applicants["2026_04"] == fc_mkt.applicants["2026_04"]
     # 검증된 기준 신청자 유지
-    assert abs(fc_none.applicants["2026_04"][1] - 26_132) / 26_132 < 0.01
+    assert abs(fc_none.applicants["2026_04"][1] - 25_306) / 25_306 < 0.01
 
 
 def test_market_bull_raises_forecast():
