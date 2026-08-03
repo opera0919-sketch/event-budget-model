@@ -26,6 +26,9 @@ python -m event_budget.cli backtest events/2026_pension_irp.yaml --min-train 3
 python -m event_budget.cli stress events/2026_pension_transfer_stress.yaml
 python scripts/build_stress_xlsx.py        # 엑셀 보고서
 
+# 26.5~7월 홀드아웃 검증(신청자·예산 단가를 그 시점 데이터만으로 재예측해 실측 대조)
+PYTHONPATH=src python scripts/validate_holdout.py --write
+
 pytest tests/
 ```
 
@@ -70,6 +73,7 @@ schema/event_schema.yaml 명세 필드 정의.
 src/event_budget/       엔진: schema/demand/budget/scenario/simulate/calibrate/report/cli
                         + tiers(구간 리워드)/stress(2축 스트레스 테스트).
 scripts/build_stress_xlsx.py  스트레스 결과 → 엑셀 보고서.
+scripts/validate_holdout.py   26.5~7월 홀드아웃 검증 → reports/2026_05-07_예측검증.md.
 reports/*.md            생성된 한국어 리포트.
 docs/methodology.md     변수 정의·모델 수식·운영 루프(상세).
 tests/                  pytest.
