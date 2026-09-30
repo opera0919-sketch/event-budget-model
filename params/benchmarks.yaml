@@ -1,0 +1,38 @@
+# 벤치마크 사전값 라이브러리
+# - take_rate: 상품별/시즌별 신청자÷기준고객수 비율의 사전값(fallback).
+#   data/history.csv 실측이 있으면 calibrate가 이 값을 덮어씀(보정).
+# - 시즌 코드: 1=_01(2~4월), 2=_02(5~7월), 3=_03(8~10월), 4=_04(11~1월, 연말정산 성수기)
+# - blend_recent_weight: 시즌평균과 최근추세를 섞는 가중치(최근추세 반영도).
+# - min_cv: 시나리오 밴드(보수/낙관)를 만들 때 take_rate 변동계수 하한.
+
+take_rate:
+  pension:               # 연금저축
+    1: 0.0122
+    2: 0.0103
+    3: 0.0094
+    4: 0.0129
+  irp:                   # IRP
+    1: 0.0158
+    2: 0.0280
+    3: 0.0234
+    4: 0.0437
+
+blend_recent_weight: 0.5   # 기준 take_rate = 0.5*시즌평균 + 0.5*최근추세
+recent_window: 4           # 최근추세 = 최근 4개 관측 회차 take_rate 평균
+min_cv: 0.15               # 시나리오 밴드 최소 변동계수
+exclude_rounds:           # take_rate 산정에서 제외할 파일럿/초기 회차
+  - "2024_03"
+
+# 예산 시나리오 레버 기본값(이벤트 명세에서 덮어쓸 수 있음)
+levers:
+  goal_achievement: [0.8, 1.0, 1.2]      # 보수/기준/낙관
+  reward_payout_rate: [0.6, 0.7, 0.8]
+  # avg_reward 는 상품/이벤트별로 명세에서 지정(원)
+
+# 시장·거시 지표 결합(#2) — KOSPI 월별. 탄력성 0이면 시장배수=1.0 → 결과 불변(기본 OFF).
+# data/market.csv에 KOSPI 지표가 채워져 있으며, 아래 탄력성을 >0으로 설정하면 활성화.
+# 배수 = Π (지표/학습기간평균)^탄력성. 예측 회차 지표는 시나리오로 입력(없으면 중립).
+market:
+  index_elasticity: 0.0    # KOSPI 월말 종가(kospi_close)
+  trade_elasticity: 0.0    # KOSPI 월 거래 원자료(kospi_trade)
+  vkospi_elasticity: 0.0   # 변동성지수(현재 데이터 미보유)
